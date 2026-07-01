@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
+from tqdm import tqdm
 from transformers import AutoTokenizer, DynamicCache
 
 from deepspec.data.parser import encode_chat_messages
@@ -527,7 +528,20 @@ class BaseEvaluator:
 
         stop_token_ids = resolve_stop_token_ids(self.target_model, self.tokenizer)
         responses = []
-        for idx in range(self.global_rank, len(dataset), self.world_size):
+        local_indices = list(range(self.global_rank, len(dataset), self.world_size))
+        if self.global_rank == 0:
+            print(
+                f"Evaluating {dataset_name}: total_samples={len(dataset)} "
+                f"world_size={self.world_size} rank0_samples={len(local_indices)}",
+                flush=True,
+            )
+        iterator = tqdm(
+            local_indices,
+            desc=f"eval {dataset_name} rank{self.global_rank}",
+            disable=self.global_rank != 0,
+            dynamic_ncols=True,
+        )
+        for idx in iterator:
             seed_all(int(self.args.seed) + idx)
             instance = dataset[idx]
             messages = [{"role": "user", "content": instance["turns"][0]}]

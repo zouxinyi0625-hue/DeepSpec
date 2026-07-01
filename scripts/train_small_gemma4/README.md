@@ -136,6 +136,26 @@ PYTHONPATH=$PWD python scripts/inspect_dspark_gemma4.py \
   --format json > dspark_gemma4_small_arch.json
 ```
 
+## Peek at actual training samples/cache
+
+Use this helper to inspect one regenerated JSONL record, how it is tokenized for training, which tokens are supervised by `loss_mask`, and the matching target-cache tensor shapes:
+
+```bash
+PYTHONPATH=$PWD python scripts/data/peek_training_data.py \
+  --jsonl train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl \
+  --cache-dir ${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
+  --index 0
+```
+
+For the 50k run, swap paths:
+
+```bash
+PYTHONPATH=$PWD python scripts/data/peek_training_data.py \
+  --jsonl train_datasets/gemma4_12b/perfectblend_train_regen_50k.jsonl \
+  --cache-dir ${HOME}/.cache/deepspec/gemma4_12b_target_cache_50k \
+  --index 0
+```
+
 ## Step 3: train DSpark on the small cache
 
 ```bash

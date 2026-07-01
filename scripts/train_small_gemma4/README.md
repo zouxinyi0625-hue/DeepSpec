@@ -156,6 +156,41 @@ PYTHONPATH=$PWD python scripts/data/peek_training_data.py \
   --index 0
 ```
 
+## Debug trace train/eval internals
+
+For step-by-step tensor tracing, use these helpers.
+
+Trace the training path from a target-cache sample through anchor/block construction:
+
+```bash
+PYTHONPATH=$PWD python scripts/debug_trace_dspark_train.py \
+  --config config/dspark/dspark_gemma4_12b_small.py \
+  --cache-dir ${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
+  --indices 0
+```
+
+Optionally run one real DSpark forward pass (heavier):
+
+```bash
+PYTHONPATH=$PWD python scripts/debug_trace_dspark_train.py \
+  --config config/dspark/dspark_gemma4_12b_small.py \
+  --cache-dir ${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
+  --indices 0 \
+  --run-forward \
+  --init-target-embeddings
+```
+
+Trace a few rounds of speculative decoding in eval/inference:
+
+```bash
+PYTHONPATH=$PWD python scripts/debug_trace_dspark_eval.py \
+  --target-name-or-path google/gemma-4-12B-it \
+  --draft-name-or-path ${HOME}/checkpoints/deepspec_small/dspark_block5_gemma4_12b_1k/step_latest \
+  --prompt "Explain speculative decoding in one short paragraph." \
+  --max-new-tokens 16 \
+  --max-rounds 3
+```
+
 ## Step 3: train DSpark on the small cache
 
 ```bash

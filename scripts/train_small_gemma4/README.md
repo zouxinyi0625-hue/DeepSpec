@@ -159,6 +159,12 @@ bash scripts/train_small_gemma4/eval_dspark_1k.sh
 
 ## Inspect data/cache sizes
 
+The first successful small-data eval result is recorded in:
+
+```text
+scripts/train_small_gemma4/RESULTS.md
+```
+
 Use the helper below to see how many rows/samples you have and rough length distributions:
 
 ```bash

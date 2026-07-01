@@ -30,6 +30,9 @@ export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
+# Make direct script execution from scripts/data able to import the local
+# deepspec package without requiring an editable install.
+export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 
 server_addresses=()
 for ((worker_id = 0; worker_id < num_workers; worker_id++)); do

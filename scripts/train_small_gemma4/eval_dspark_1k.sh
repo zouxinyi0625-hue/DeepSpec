@@ -16,6 +16,7 @@ export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
+export PYTHONPATH="${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
 
 python scripts/train_small_gemma4/eval_small.py \
   --target_name_or_path "${TARGET_NAME_OR_PATH}" \

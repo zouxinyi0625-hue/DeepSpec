@@ -117,7 +117,24 @@ train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl
 ~/.cache/deepspec/gemma4_12b_target_cache_1k
 ```
 
-If SGLang is using the same GPU needed for target-cache preparation, stop the SGLang launcher after generation completes and before Step 3 in `prepare_data.sh`. The script prints this reminder before cache preparation.
+With `stop_sglang_after_generation=1`, `prepare_data.sh` stops the matching SGLang workers after generation completes and before Step 3 target-cache preparation. This avoids manually freeing GPUs when generation and cache preparation share the same devices.
+
+## Inspect Gemma4 + DSpark architecture
+
+Use this helper to print target/draft config, derived tensor shapes, and key module parameter counts:
+
+```bash
+PYTHONPATH=$PWD python scripts/inspect_dspark_gemma4.py \
+  --config config/dspark/dspark_gemma4_12b_small.py
+```
+
+JSON output for saving/comparison:
+
+```bash
+PYTHONPATH=$PWD python scripts/inspect_dspark_gemma4.py \
+  --config config/dspark/dspark_gemma4_12b_small.py \
+  --format json > dspark_gemma4_small_arch.json
+```
 
 ## Step 3: train DSpark on the small cache
 

@@ -172,12 +172,6 @@ class Gemma4DSparkDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        assert not bool(config.enable_moe_block), (
-            "Gemma4 DSpark prototype does not support Gemma4 MoE blocks yet."
-        )
-        assert int(config.hidden_size_per_layer_input) == 0, (
-            "Gemma4 DSpark prototype does not support per-layer input gates yet."
-        )
         self.self_attn = Gemma4DSparkAttention(config=config, layer_idx=layer_idx)
         self.mlp = Gemma4TextMLP(config, layer_idx)
         self.input_layernorm = Gemma4RMSNorm(

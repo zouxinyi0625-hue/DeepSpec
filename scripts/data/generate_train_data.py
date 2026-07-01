@@ -110,7 +110,11 @@ def call_sglang(args, server_address, sample, max_tokens=None):
     if conversations[0].get("role") == "assistant":
         return error_sample(sample, "Data starts with an assistant message")
 
-    client = OpenAI(base_url=f"http://{server_address}/v1", api_key="None")
+    if server_address.startswith("http://") or server_address.startswith("https://"):
+        base_url = server_address
+    else:
+        base_url = f"http://{server_address}/v1"
+    client = OpenAI(base_url=base_url, api_key="None")
     regenerated = []
 
     for message in conversations:

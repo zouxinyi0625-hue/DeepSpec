@@ -14,6 +14,9 @@ dtype=${dtype:-bfloat16}
 mem_frac=${mem_frac:-0.9}
 log_dir=${log_dir:-logs/sglang_qwen3_4b}
 heartbeat_interval=${heartbeat_interval:-300}
+# By default worker logs are written only to per-worker log files.
+# Set stream_logs=1 to also mirror each worker's logs to this terminal.
+stream_logs=${stream_logs:-0}
 
 get_host_ip() {
     local host_ip=""
@@ -99,14 +102,27 @@ for ((gpu_id = 0; gpu_id < num_workers; gpu_id++)); do
     log_file=${log_dir}/worker_${host_ip}_gpu_${gpu_id}_port_${port}.log
 
     echo "Starting sglang worker ip=${host_ip} gpu=${gpu_id} port=${port} nccl_port=${nccl_port} log=${log_file}"
-    CUDA_VISIBLE_DEVICES=${gpu_id} sglang serve \
-        --model-path "${model_path}" \
-        --host "${host}" \
-        --port "${port}" \
-        --nccl-port "${nccl_port}" \
-        --dtype "${dtype}" \
-        --mem-fraction-static "${mem_frac}" \
-        "$@" > "${log_file}" 2>&1 &
+    if [[ "${stream_logs}" == "1" || "${stream_logs}" == "true" ]]; then
+        CUDA_VISIBLE_DEVICES=${gpu_id} sglang serve \
+            --model-path "${model_path}" \
+            --host "${host}" \
+            --port "${port}" \
+            --nccl-port "${nccl_port}" \
+            --dtype "${dtype}" \
+            --mem-fraction-static "${mem_frac}" \
+            "$@" 2>&1 \
+            | sed -u "s/^/[gpu=${gpu_id} port=${port}] /" \
+            | tee -a "${log_file}" &
+    else
+        CUDA_VISIBLE_DEVICES=${gpu_id} sglang serve \
+            --model-path "${model_path}" \
+            --host "${host}" \
+            --port "${port}" \
+            --nccl-port "${nccl_port}" \
+            --dtype "${dtype}" \
+            --mem-fraction-static "${mem_frac}" \
+            "$@" > "${log_file}" 2>&1 &
+    fi
     pids+=("$!")
     ports+=("${port}")
     nccl_ports+=("${nccl_port}")

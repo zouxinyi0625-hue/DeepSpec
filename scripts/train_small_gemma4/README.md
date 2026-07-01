@@ -51,6 +51,7 @@ num_workers=1 \
 start_port=30000 \
 log_dir=logs/sglang_gemma4_12b_small \
 mem_frac=0.9 \
+stream_logs=1 \
 bash scripts/data/launch_sglang_server.sh
 ```
 
@@ -61,6 +62,7 @@ model_path=google/gemma-4-12B-it \
 num_workers=4 \
 start_port=30000 \
 log_dir=logs/sglang_gemma4_12b_small \
+stream_logs=1 \
 bash scripts/data/launch_sglang_server.sh
 ```
 

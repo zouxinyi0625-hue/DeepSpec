@@ -1,207 +1,166 @@
 # Gemma4-12B DSpark Small-Data Reproduction
 
-This folder contains a small end-to-end pipeline for reproducing DSpark training on **1,000 regenerated Gemma4-12B samples** before scaling to the full dataset.
+Goal: **follow the repository's existing pipeline first**, using only a small number of prompts, so we can verify the project runs end to end before using custom data or adding innovations.
 
-It intentionally avoids editing the repo's default scripts/configs. The new small config is:
+The repository's native data pipeline is:
+
+```text
+scripts/data/download_and_split.py
+  -> scripts/data/launch_sglang_server.sh
+  -> scripts/data/generate_train_data.py
+  -> scripts/data/prepare_target_cache.py
+  -> train.py
+```
+
+This branch keeps that flow. The default Qwen3 behavior of `scripts/data/launch_sglang_server.sh` and `scripts/data/prepare_data.sh` is unchanged, but they now accept environment-variable overrides so we can run a Gemma4-12B small-data smoke test.
+
+## Small Gemma4 config
 
 ```text
 config/dspark/dspark_gemma4_12b_small.py
 ```
 
-## What this runs
+Key differences from the full Gemma4 config:
 
-- Target model: `google/gemma-4-12B-it`
-- Draft model: Gemma4 DSpark
-- Block size: `5` (smaller than the default 7 for faster smoke runs)
-- Draft layers: `5`
-- Target feature layers: `[5, 17, 29, 41, 46]`
-- Markov head: vanilla, rank `256`
-- Confidence head: enabled
-- Training subset: first `1000` JSONL samples
-- Default train budget: `max_train_steps=200`, `num_train_epochs=1`
-- Default max sequence length for cache: `1024`
-- Default sampled anchors: `128`
+```text
+block_size=5
+num_anchors=128
+data.max_length=1024
+train.global_batch_size=64
+train.max_train_steps=200
+```
 
-## Fast path: fully prepare 1k data from the public example dataset
-
-If you have a Gemma4-12B OpenAI-compatible server already running, this single command downloads a 1k-ish Open-PerfectBlend prompt subset, regenerates 1000 target answers with Gemma4-12B, and builds the DSpark target cache:
+## Step 0: install dependencies
 
 ```bash
-SERVER_ADDRESS=127.0.0.1:30000 \
+cd /path/to/DeepSpec
+python -m pip install -r requirements.txt
+# SGLang is intentionally not in requirements.txt in this repo.
+python -m pip install "sglang[all]"
+```
+
+## Step 1: launch Gemma4-12B through the repo's SGLang launcher
+
+Use the project script, only overriding env vars:
+
+```bash
+cd /path/to/DeepSpec
+
+model_path=google/gemma-4-12B-it \
+num_workers=1 \
+start_port=30000 \
+log_dir=logs/sglang_gemma4_12b_small \
+mem_frac=0.9 \
+bash scripts/data/launch_sglang_server.sh
+```
+
+For multiple GPUs/workers:
+
+```bash
+model_path=google/gemma-4-12B-it \
+num_workers=4 \
+start_port=30000 \
+log_dir=logs/sglang_gemma4_12b_small \
+bash scripts/data/launch_sglang_server.sh
+```
+
+Leave this terminal running. The script prints worker URLs like:
+
+```text
+http://<host-ip>:30000
+```
+
+The data script below uses `server_host=127.0.0.1` by default, so on the same node it will call `127.0.0.1:30000`.
+
+## Step 2: run the repo's data pipeline on a small prompt sample
+
+In a second terminal:
+
+```bash
+cd /path/to/DeepSpec
+
+model_path=google/gemma-4-12B-it \
+config_path=config/dspark/dspark_gemma4_12b_small.py \
+sample_size=1100 \
+num_samples=1000 \
+train_split_path=train_datasets/gemma4_12b/perfectblend_train_prompt_small.jsonl \
+train_data_path=train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl \
+cache_dir=${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
+num_workers=1 \
+start_port=30000 \
+concurrency=8 \
+temperature=1.0 \
+top_p=0.95 \
+top_k=20 \
+min_p=0 \
+max_tokens=2048 \
+local_batch_size=2 \
 CUDA_VISIBLE_DEVICES=0 \
-LOCAL_BATCH_SIZE=2 \
-bash scripts/train_small_gemma4/prepare_end_to_end_1k.sh
+bash scripts/data/prepare_data.sh
 ```
 
-Multiple servers are supported:
+What this does, using repo scripts:
 
-```bash
-SERVER_ADDRESS="127.0.0.1:30000 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003" \
-bash scripts/train_small_gemma4/prepare_end_to_end_1k.sh
-```
+1. `download_and_split.py` downloads `mlabonne/open-perfectblend`, samples `sample_size=1100`, and writes prompts to `train_split_path`.
+2. `generate_train_data.py` calls the SGLang server launched in Step 1 and writes 1000 regenerated Gemma4 samples to `train_data_path`.
+3. `prepare_target_cache.py` builds the target cache at `cache_dir` with `config/dspark/dspark_gemma4_12b_small.py`.
 
 Outputs:
 
 ```text
-train_datasets/gemma4_12b/perfectblend_train_prompt_1k_source.jsonl
+train_datasets/gemma4_12b/perfectblend_train_prompt_small.jsonl
 train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl
 ~/.cache/deepspec/gemma4_12b_target_cache_1k
 ```
 
-Adjust sampling parameters to whatever Gemma4-12B serving recipe you want the drafter to mimic:
+If SGLang is using the same GPU needed for target-cache preparation, stop the SGLang launcher after generation completes and before Step 3 in `prepare_data.sh`. The script prints this reminder before cache preparation.
+
+## Step 3: train DSpark on the small cache
 
 ```bash
-SERVER_ADDRESS=127.0.0.1:30000 \
-GEN_TEMPERATURE=1.0 \
-GEN_TOP_P=0.95 \
-GEN_MAX_TOKENS=2048 \
-bash scripts/train_small_gemma4/prepare_end_to_end_1k.sh
-```
-
-## Alternative: use an existing regenerated JSONL
-
-DSpark training should use responses regenerated by the **same target model**. If you already have a regenerated Gemma4-12B JSONL, skip generation and use [Step 2](#step-2-prepare-a-1k-target-cache).
-
-## Step 1: Environment
-
-From the repo root:
-
-```bash
-cd /mnt/c/Users/xinyizou/code/DeepSpec
-python -m pip install -r requirements.txt
-```
-
-Use a GPU environment. Single-GPU smoke runs are supported by setting `CUDA_VISIBLE_DEVICES=0`, but Gemma4-12B cache preparation may still need a large GPU depending on your local target model loading setup.
-
-## Step 2: Prepare a 1k target cache
-
-```bash
-cd /mnt/c/Users/xinyizou/code/DeepSpec
-
-TRAIN_JSONL=train_datasets/gemma4_12b/perfectblend_train_regen.jsonl \
-CUDA_VISIBLE_DEVICES=0 \
-LOCAL_BATCH_SIZE=2 \
-bash scripts/train_small_gemma4/prepare_1k_cache.sh
-```
-
-Defaults:
-
-```text
-Input:  train_datasets/gemma4_12b/perfectblend_train_regen.jsonl
-Subset: train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl
-Cache:  ~/.cache/deepspec/gemma4_12b_target_cache_1k
-```
-
-You can override them:
-
-```bash
-TRAIN_JSONL=/data/my_gemma4_regen.jsonl \
-SAMPLE_JSONL=/data/my_gemma4_regen_1k.jsonl \
-TARGET_CACHE_DIR=/data/cache/gemma4_12b_target_cache_1k \
-NUM_SAMPLES=1000 \
-CUDA_VISIBLE_DEVICES=0 \
-LOCAL_BATCH_SIZE=1 \
-bash scripts/train_small_gemma4/prepare_1k_cache.sh
-```
-
-### Why the cache is required
-
-Training reads precomputed target hidden states and last hidden states so the draft model can learn:
-
-- next-token CE loss
-- target/draft distribution matching via L1/TV distance
-- confidence labels from analytical acceptance probabilities
-
-The full default dataset can require tens of TB. This small run reduces cost with:
-
-- `NUM_SAMPLES=1000`
-- `data.max_length=1024`
-- `model.num_anchors=128`
-- `model.block_size=5`
-
-## Step 3: Train DSpark on the 1k cache
-
-```bash
-TARGET_CACHE_DIR=~/.cache/deepspec/gemma4_12b_target_cache_1k \
+TARGET_CACHE_DIR=${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
 CUDA_VISIBLE_DEVICES=0 \
 bash scripts/train_small_gemma4/train_dspark_1k.sh
 ```
 
-Optional overrides:
+Optional quick smoke test:
 
 ```bash
-TARGET_CACHE_DIR=~/.cache/deepspec/gemma4_12b_target_cache_1k \
-CUDA_VISIBLE_DEVICES=0,1 \
-LOCAL_BATCH_SIZE=1 \
-GLOBAL_BATCH_SIZE=64 \
-MAX_TRAIN_STEPS=100 \
+TARGET_CACHE_DIR=${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
+MAX_TRAIN_STEPS=50 \
+CUDA_VISIBLE_DEVICES=0 \
 bash scripts/train_small_gemma4/train_dspark_1k.sh
 ```
 
-Outputs:
+Checkpoints:
 
 ```text
 ~/checkpoints/deepspec_small/dspark_block5_gemma4_12b_1k/
+```
+
+TensorBoard:
+
+```text
 ~/tensorboard/deepspec_small/dspark_block5_gemma4_12b_1k/
 ```
 
-Useful training metrics already logged by the code:
-
-```text
-accept_rate@0..4
-tau_probabilistic
-confidence_abs_error
-confidence_bias
-confidence_cumprod_bias
-```
-
-## Step 4: Lightweight eval smoke test
-
-After a checkpoint exists:
+## Step 4: small eval smoke test
 
 ```bash
 TARGET_NAME_OR_PATH=google/gemma-4-12B-it \
-DRAFT_NAME_OR_PATH=~/checkpoints/deepspec_small/dspark_block5_gemma4_12b_1k/step_latest \
+DRAFT_NAME_OR_PATH=${HOME}/checkpoints/deepspec_small/dspark_block5_gemma4_12b_1k/step_latest \
+TASKS=gsm8k:32,mt-bench:16,alpaca:32 \
 CUDA_VISIBLE_DEVICES=0 \
 bash scripts/train_small_gemma4/eval_dspark_1k.sh
 ```
 
-Defaults:
+## Notes
 
-```text
-TASKS=gsm8k:32,mt-bench:16,alpaca:32
-MAX_NEW_TOKENS=512
-CONFIDENCE_THRESHOLD=0.0
-```
-
-Try confidence-threshold truncation:
-
-```bash
-CONFIDENCE_THRESHOLD=0.5 \
-TASKS=gsm8k:32,mt-bench:16,alpaca:32 \
-bash scripts/train_small_gemma4/eval_dspark_1k.sh
-```
-
-`CONFIDENCE_THRESHOLD=0.0` verifies the full block and records confidence calibration artifacts. Threshold > 0 truncates the draft prefix at the first low-confidence position.
-
-## Recommended ablations after the first successful run
-
-The default DSpark config changes multiple things relative to DFlash, so use ablations to isolate gains:
-
-1. DFlash baseline: `markov_rank=0`, `confidence_head_alpha=0`, `ce_loss_alpha=1.0`, `l1_loss_alpha=0.0`
-2. DFlash + L1: `markov_rank=0`, `confidence_head_alpha=0`, `ce_loss_alpha=0.1`, `l1_loss_alpha=0.9`
-3. DSpark Markov only: `markov_rank=256`, `confidence_head_alpha=0`, `ce_loss_alpha=1.0`, `l1_loss_alpha=0.0`
-4. DSpark Markov + L1: `markov_rank=256`, `confidence_head_alpha=0`, `ce_loss_alpha=0.1`, `l1_loss_alpha=0.9`
-5. DSpark full: default small config
-
-Most of these can be run with `--opts` via `train_dspark_1k.sh`, except keys that are required during draft-config construction should be changed carefully in a copied config file.
-
-## Notes for Gemma4 MoE/A4B models
-
-The current open-source Gemma4 DSpark prototype has this assertion:
+- This is only to get the project running with a small sample. After that we can switch to custom data and add architectural changes.
+- The open-source Gemma4 DSpark implementation is dense-only for the draft backbone:
 
 ```python
 assert not bool(config.enable_moe_block), "Gemma4 DSpark prototype does not support Gemma4 MoE blocks yet."
 ```
 
-So this small pipeline targets dense `google/gemma-4-12B-it`. For Gemma4 MoE/A4B draft backbones, the DSpark decoder layer must be extended to instantiate the Gemma4 MoE block instead of `Gemma4TextMLP`.
+- The native `prepare_data.sh` still defaults to the original Qwen3 pipeline if no env vars are provided.

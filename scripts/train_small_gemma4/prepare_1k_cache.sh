@@ -57,16 +57,20 @@ from pathlib import Path
 src = Path(${TRAIN_JSONL@Q})
 dst = Path(${SAMPLE_JSONL@Q})
 n = int(${NUM_SAMPLES@Q})
-count = 0
-with src.open('r', encoding='utf-8') as fin, dst.open('w', encoding='utf-8') as fout:
-    for line in fin:
-        if not line.strip():
-            continue
-        fout.write(line)
-        count += 1
-        if count >= n:
-            break
-print(f"Wrote {count} samples to {dst}")
+if src.resolve() == dst.resolve():
+    count = sum(1 for line in src.open('r', encoding='utf-8') if line.strip())
+    print(f"Reusing existing sample file {dst} with {count} non-empty rows")
+else:
+    count = 0
+    with src.open('r', encoding='utf-8') as fin, dst.open('w', encoding='utf-8') as fout:
+        for line in fin:
+            if not line.strip():
+                continue
+            fout.write(line)
+            count += 1
+            if count >= n:
+                break
+    print(f"Wrote {count} samples to {dst}")
 if count == 0:
     raise SystemExit(f"No non-empty samples found in {src}")
 PY

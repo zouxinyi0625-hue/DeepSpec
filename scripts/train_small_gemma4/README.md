@@ -86,6 +86,7 @@ config_path=config/dspark/dspark_gemma4_12b_small.py \
 sample_size=1100 \
 num_samples=1000 \
 train_split_path=train_datasets/gemma4_12b/perfectblend_train_prompt_small.jsonl \
+test_output_name=perfectblend_small_gemma4.jsonl \
 train_data_path=train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl \
 cache_dir=${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
 num_workers=8 \

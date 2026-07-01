@@ -149,29 +149,43 @@ def user_turns(row: dict) -> list[str]:
     ]
 
 
-def write_train_jsonl(dataset, output_path: Path) -> int:
+def write_train_jsonl(dataset, output_path: Path) -> tuple[int, int]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    skipped = 0
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError as exc:
+                skipped += 1
+                if skipped <= 10:
+                    print(f"skip invalid train row {row_number}: {exc}")
+                continue
             handle.write(json.dumps(converted, ensure_ascii=False) + "\n")
             count += 1
-    return count
+    return count, skipped
 
 
-def write_eval_jsonl(dataset, output_path: Path) -> int:
+def write_eval_jsonl(dataset, output_path: Path) -> tuple[int, int]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
+    skipped = 0
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError as exc:
+                skipped += 1
+                if skipped <= 10:
+                    print(f"skip invalid eval row {row_number}: {exc}")
+                continue
             turns = user_turns(converted)
             handle.write(json.dumps({"turns": turns}, ensure_ascii=False) + "\n")
             count += 1
-    return count
+    return count, skipped
 
 
 def main() -> None:
@@ -186,12 +200,18 @@ def main() -> None:
     dataset = load_source_dataset(args)
     split_dataset = dataset.train_test_split(test_size=args.test_size, seed=args.seed)
 
-    train_count = write_train_jsonl(split_dataset["train"], args.train_output_path)
+    train_count, train_skipped = write_train_jsonl(split_dataset["train"], args.train_output_path)
     eval_output_path = test_output_path(args)
-    test_count = write_eval_jsonl(split_dataset["test"], eval_output_path)
+    test_count, test_skipped = write_eval_jsonl(split_dataset["test"], eval_output_path)
 
-    print(f"wrote train split: {train_count} rows -> {args.train_output_path}")
-    print(f"wrote eval split: {test_count} rows -> {eval_output_path}")
+    print(
+        f"wrote train split: {train_count} rows -> {args.train_output_path} "
+        f"(skipped {train_skipped} invalid rows)"
+    )
+    print(
+        f"wrote eval split: {test_count} rows -> {eval_output_path} "
+        f"(skipped {test_skipped} invalid rows)"
+    )
 
 
 if __name__ == "__main__":

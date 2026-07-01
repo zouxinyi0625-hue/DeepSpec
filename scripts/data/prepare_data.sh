@@ -9,6 +9,7 @@ test_size=${test_size:-0.05}
 sample_size=${sample_size:-}
 train_split_path=${train_split_path:-train_datasets/perfectblend_train.jsonl}
 eval_data_dir=${eval_data_dir:-eval_datasets}
+test_output_name=${test_output_name:-perfectblend.jsonl}
 
 train_data_path=${train_data_path:-train_datasets/qwen3_4b/perfectblend_train_regen.jsonl}
 cache_dir=${cache_dir:-${HOME}/.cache/deepspec/qwen3_4b_target_cache}
@@ -80,6 +81,7 @@ download_args=(
     --test-size "${test_size}"
     --train-output-path "${train_split_path}"
     --test-output-dir "${eval_data_dir}"
+    --test-output-name "${test_output_name}"
     --skip-existing
 )
 if [[ -n "${sample_size}" ]]; then

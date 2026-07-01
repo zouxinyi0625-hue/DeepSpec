@@ -24,6 +24,10 @@ min_p=${min_p:-0}
 max_tokens=${max_tokens:-4096}
 num_samples=${num_samples:-}
 local_batch_size=${local_batch_size:-16}
+# Set to 1 to stop SGLang workers launched for Step 2 before preparing the
+# target cache in Step 3. This is useful when generation and cache preparation
+# share the same GPUs.
+stop_sglang_after_generation=${stop_sglang_after_generation:-0}
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -38,6 +42,37 @@ server_addresses=()
 for ((worker_id = 0; worker_id < num_workers; worker_id++)); do
     server_addresses+=("${server_host}:$((start_port + worker_id))")
 done
+
+stop_sglang_workers() {
+    local port pids pid
+    echo "Stopping SGLang workers for model=${model_path}, ports ${start_port}..$((start_port + num_workers - 1))"
+    for ((worker_id = 0; worker_id < num_workers; worker_id++)); do
+        port=$((start_port + worker_id))
+        pids=$(pgrep -f "sglang serve.*--model-path ${model_path}.*--port ${port}" || true)
+        if [[ -z "${pids}" ]]; then
+            pids=$(pgrep -f "sglang.*--model-path ${model_path}.*--port ${port}" || true)
+        fi
+        if [[ -z "${pids}" ]]; then
+            echo "  port=${port}: no matching SGLang process found"
+            continue
+        fi
+        for pid in ${pids}; do
+            echo "  port=${port}: terminate pid=${pid}"
+            kill "${pid}" 2>/dev/null || true
+        done
+    done
+    sleep 5
+    for ((worker_id = 0; worker_id < num_workers; worker_id++)); do
+        port=$((start_port + worker_id))
+        pids=$(pgrep -f "sglang.*--model-path ${model_path}.*--port ${port}" || true)
+        if [[ -n "${pids}" ]]; then
+            for pid in ${pids}; do
+                echo "  port=${port}: force kill pid=${pid}"
+                kill -9 "${pid}" 2>/dev/null || true
+            done
+        fi
+    done
+}
 
 echo "Step 1/3: downloading and splitting ${dataset_name}"
 download_args=(
@@ -75,7 +110,12 @@ if [[ -n "${num_samples}" ]]; then
 fi
 python scripts/data/generate_train_data.py "${gen_args[@]}"
 
-echo "Stop sglang before Step 3 if it is using the same GPUs."
+if [[ "${stop_sglang_after_generation}" == "1" || "${stop_sglang_after_generation}" == "true" ]]; then
+    stop_sglang_workers
+else
+    echo "Stop sglang before Step 3 if it is using the same GPUs."
+fi
+
 echo "Step 3/3: preparing ${model_path} target cache: ${cache_dir}"
 python scripts/data/prepare_target_cache.py \
     --config "${config_path}" \

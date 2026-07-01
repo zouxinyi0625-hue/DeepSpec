@@ -88,16 +88,17 @@ num_samples=1000 \
 train_split_path=train_datasets/gemma4_12b/perfectblend_train_prompt_small.jsonl \
 train_data_path=train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl \
 cache_dir=${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k \
-num_workers=1 \
+num_workers=8 \
 start_port=30000 \
-concurrency=8 \
+concurrency=32 \
 temperature=1.0 \
 top_p=0.95 \
 top_k=20 \
 min_p=0 \
 max_tokens=2048 \
 local_batch_size=2 \
-CUDA_VISIBLE_DEVICES=0 \
+stop_sglang_after_generation=1 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 bash scripts/data/prepare_data.sh
 ```
 

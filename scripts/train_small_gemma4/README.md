@@ -157,6 +157,23 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/train_small_gemma4/eval_dspark_1k.sh
 ```
 
+## Inspect data/cache sizes
+
+Use the helper below to see how many rows/samples you have and rough length distributions:
+
+```bash
+python scripts/data/summarize_data.py \
+  --jsonl train_datasets/gemma4_12b/perfectblend_train_prompt_small.jsonl \
+  --jsonl train_datasets/gemma4_12b/perfectblend_train_regen_1k.jsonl \
+  --cache-dir ${HOME}/.cache/deepspec/gemma4_12b_target_cache_1k
+```
+
+For a quick estimate on a large JSONL, cap the scan:
+
+```bash
+python scripts/data/summarize_data.py --jsonl train_datasets/perfectblend_train.jsonl --max-rows 10000
+```
+
 ## Notes
 
 - This is only to get the project running with a small sample. After that we can switch to custom data and add architectural changes.

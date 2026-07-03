@@ -56,6 +56,12 @@ def parse_args():
         default="gsm8k:32,mt-bench:16,alpaca:32",
         help="Comma-separated task:max_samples list, e.g. gsm8k:32,mt-bench:16.",
     )
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        default="./eval_datasets",
+        help="Directory containing eval JSONL files with `turns` fields.",
+    )
     args = parser.parse_args()
     args.tasks = _parse_tasks(args.tasks)
     return args

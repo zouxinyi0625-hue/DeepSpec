@@ -10,6 +10,7 @@ DRAFT_NAME_OR_PATH=${DRAFT_NAME_OR_PATH:-${HOME}/checkpoints/deepspec_small/dspa
 TASKS=${TASKS:-gsm8k:32,mt-bench:16,alpaca:32}
 MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-512}
 CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.0}
+DATASET_ROOT=${DATASET_ROOT:-./eval_datasets}
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -22,5 +23,6 @@ python scripts/train_small_gemma4/eval_small.py \
   --target_name_or_path "${TARGET_NAME_OR_PATH}" \
   --draft_name_or_path "${DRAFT_NAME_OR_PATH}" \
   --tasks "${TASKS}" \
+  --dataset-root "${DATASET_ROOT}" \
   --max-new-tokens "${MAX_NEW_TOKENS}" \
   --confidence-threshold "${CONFIDENCE_THRESHOLD}"

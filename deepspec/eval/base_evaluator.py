@@ -518,7 +518,8 @@ class BaseEvaluator:
         max_samples: int | None,
     ) -> list[SimpleNamespace]:
         seed_all(int(self.args.seed))
-        dataset = load_and_process_dataset(dataset_name)
+        dataset_root = getattr(self.args, "dataset_root", DEFAULT_DATASET_ROOT)
+        dataset = load_and_process_dataset(dataset_name, dataset_root=dataset_root)
 
         if max_samples is not None and len(dataset) > max_samples:
             rng = random.Random(int(self.args.seed))

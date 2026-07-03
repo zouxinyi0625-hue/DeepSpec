@@ -4,11 +4,17 @@ import argparse
 import csv
 import json
 import os
-from collections import Counter, defaultdict
+import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from transformers import AutoTokenizer
+
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover - tqdm is optional for this helper
+    tqdm = None
 
 
 def percentile(sorted_values: list[int], q: float) -> int | None:
@@ -127,6 +133,7 @@ def analyze_file(
     max_rows: int | None,
     length_thresholds: list[int],
     sample_examples: int,
+    progress_every: int,
 ) -> dict[str, Any]:
     layer = infer_layer_name(path)
     rows = 0
@@ -140,7 +147,19 @@ def analyze_file(
     examples: list[dict[str, Any]] = []
     longest: list[dict[str, Any]] = []
 
-    for line_number, record, error in load_jsonl_records(path):
+    iterator = load_jsonl_records(path)
+    progress = None
+    if tqdm is not None:
+        progress = tqdm(
+            iterator,
+            desc=f"analyze {layer}",
+            unit="rows",
+            total=max_rows,
+            dynamic_ncols=True,
+        )
+        iterator = progress
+
+    for line_number, record, error in iterator:
         if max_rows is not None and rows >= max_rows:
             break
         if error is not None:
@@ -177,7 +196,18 @@ def analyze_file(
             examples.append(item_summary)
         longest.append(item_summary)
         longest = sorted(longest, key=lambda item: int(item["tokens"]), reverse=True)[:sample_examples]
+        if max_rows and rows >= max_rows:
+            break
+        if tqdm is None and progress_every > 0 and rows % progress_every == 0:
+            print(
+                f"[analyze {layer}] rows={rows} last_line={line_number} "
+                f"last_tokens={tokens} last_chars={chars}",
+                file=sys.stderr,
+                flush=True,
+            )
 
+    if progress is not None:
+        progress.close()
     threshold_stats = {}
     for threshold in length_thresholds:
         over = sum(1 for value in token_counts if value > threshold)
@@ -278,6 +308,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rows", type=int, default=None, help="Optional per-file row cap for quick profiling.")
     parser.add_argument("--thresholds", default="2048,4096,8192,16384,32768", help="Comma-separated max_length thresholds for truncation-risk reporting.")
     parser.add_argument("--sample-examples", type=int, default=3, help="Number of first/longest examples to keep per layer in JSON output.")
+    parser.add_argument("--progress-every", type=int, default=1000, help="Fallback progress print interval when tqdm is unavailable.")
     parser.add_argument(
         "--include-empty-files",
         action="store_true",
@@ -331,17 +362,36 @@ def main() -> None:
 
     layers = []
     skipped_empty = []
-    for path in files:
+    file_iter = files
+    if tqdm is not None:
+        file_iter = tqdm(files, desc="files", unit="file", dynamic_ncols=True)
+    print(
+        f"Analyzing {len(files)} files from {input_dir}; outputs -> {output_dir}",
+        file=sys.stderr,
+        flush=True,
+    )
+    for file_idx, path in enumerate(file_iter, start=1):
+        print(f"[file {file_idx}/{len(files)}] start {path.name}", file=sys.stderr, flush=True)
         layer_summary = analyze_file(
             path,
             tokenizer=tokenizer,
             max_rows=args.max_rows,
             length_thresholds=thresholds,
             sample_examples=args.sample_examples,
+            progress_every=args.progress_every,
         )
         if not args.include_empty_files and int(layer_summary["rows"]) == 0:
             skipped_empty.append(str(path))
+            print(f"[file {file_idx}/{len(files)}] skip empty {path.name}", file=sys.stderr, flush=True)
             continue
+        token_desc = layer_summary["prompt_tokens_with_generation_prompt"]
+        print(
+            f"[file {file_idx}/{len(files)}] done {path.name}: rows={layer_summary['rows']} "
+            f"p50_tokens={token_desc['p50']} p95_tokens={token_desc['p95']} "
+            f"max_tokens={token_desc['max']}",
+            file=sys.stderr,
+            flush=True,
+        )
         layers.append(layer_summary)
     summary = {
         "input_dir": str(input_dir),

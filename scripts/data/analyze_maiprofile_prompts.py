@@ -85,34 +85,52 @@ def normalize_messages(record: dict[str, Any]) -> list[dict[str, str]]:
     return normalized
 
 
-def count_tokens(tokenizer, messages: list[dict[str, str]], *, add_generation_prompt: bool) -> int:
-    # Prefer the target model's chat template. Fall back to a simple role/content
-    # concatenation for tokenizers without apply_chat_template.
-    try:
-        ids = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=add_generation_prompt,
-            enable_thinking=False,
-        )
-        return len(ids)
-    except TypeError:
-        # Some tokenizers do not accept enable_thinking.
-        try:
-            ids = tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=add_generation_prompt,
-            )
-            return len(ids)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    text = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+def render_gemma4_prompt_for_stats(messages: list[dict[str, str]], *, add_generation_prompt: bool) -> str:
+    """Render prompt-only MAI Profile messages for length statistics.
+
+    The Gemma4 tokenizer/chat-template combination used in some environments can
+    return a nearly empty sequence for `system + user` prompt-only messages. For
+    statistics we need a stable approximation of what is sent to the target
+    service, so we render the prompt explicitly with the DeepSpec Gemma4 turn
+    tokens and merge any system text into the first user turn.
+    """
+    system_parts: list[str] = []
+    rendered: list[str] = []
+    pending_system_prefix = ""
+
+    for message in messages:
+        role = message.get("role", "")
+        content = message.get("content", "")
+        if role == "system":
+            system_parts.append(content)
+            continue
+        if role == "user":
+            if system_parts:
+                pending_system_prefix = "\n\n".join(system_parts).strip()
+                system_parts = []
+            if pending_system_prefix:
+                content = f"{pending_system_prefix}\n\n{content}"
+                pending_system_prefix = ""
+            rendered.append(f"<|turn>user\n{content}<turn|>\n")
+        elif role == "assistant":
+            rendered.append(f"<|turn>model\n{content}<turn|>\n")
+        else:
+            rendered.append(f"<|turn>user\n[{role}]\n{content}<turn|>\n")
+
+    if system_parts:
+        system_text = "\n\n".join(system_parts)
+        rendered.insert(0, f"<|turn>user\n{system_text}<turn|>\n")
     if add_generation_prompt:
-        text += "\nassistant:"
-    return len(tokenizer.encode(text, add_special_tokens=True))
+        rendered.append("<|turn>model\n")
+    return "".join(rendered)
+
+
+def count_tokens(tokenizer, messages: list[dict[str, str]], *, add_generation_prompt: bool) -> int:
+    text = render_gemma4_prompt_for_stats(
+        messages,
+        add_generation_prompt=add_generation_prompt,
+    )
+    return len(tokenizer.encode(text, add_special_tokens=False))
 
 
 def load_jsonl_records(path: Path):
@@ -278,7 +296,7 @@ def write_markdown_report(summary: dict[str, Any], output_path: Path) -> None:
     lines.append("")
     lines.append("## Notes")
     lines.append("")
-    lines.append("- `prompt_tokens_with_generation_prompt` is computed from `prompt_messages` / `conversations` using the target tokenizer's chat template with `add_generation_prompt=True`.")
+    lines.append("- `prompt_tokens_with_generation_prompt` is computed from `prompt_messages` / `conversations` using an explicit DeepSpec Gemma4-style turn rendering (`<|turn>user`, `<turn|>`, `<|turn>model`) with `add_generation_prompt=True`.")
     lines.append("- These files are prompt-only if `assistant_records` is zero; target-model response generation is still required before target-cache creation.")
     lines.append("- Use truncation-risk rows to decide whether a DSpark `max_length` is realistic for each layer.")
     lines.append("")

@@ -3,11 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 from transformers import AutoTokenizer
+
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
 
 
 def get_msndni_mount() -> Path:
@@ -61,7 +67,7 @@ def message_token_count(tokenizer, messages: list[dict[str, str]]) -> int:
     return len(tokenizer.encode(text, add_special_tokens=False))
 
 
-def analyze_regen(path: Path, tokenizer) -> dict[str, Any]:
+def analyze_regen(path: Path, tokenizer, *, progress_every: int = 1000) -> dict[str, Any]:
     status_counter = Counter()
     layer_counter = Counter()
     layer_status = defaultdict(Counter)
@@ -72,8 +78,15 @@ def analyze_regen(path: Path, tokenizer) -> dict[str, Any]:
     rows = 0
     parse_errors = 0
 
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
+    total_lines = count_jsonl(path)[0]
+    print(f"Analyzing regenerated data: {path} ({total_lines} rows)", file=sys.stderr, flush=True)
+    iterator = path.open("r", encoding="utf-8")
+    progress = None
+    if tqdm is not None:
+        progress = tqdm(iterator, total=total_lines, desc="regen", unit="rows", dynamic_ncols=True)
+        iterator = progress
+    try:
+        for line in iterator:
             if not line.strip():
                 continue
             rows += 1
@@ -98,6 +111,12 @@ def analyze_regen(path: Path, tokenizer) -> dict[str, Any]:
             assistant_text = "\n".join(m.get("content") or "" for m in assistant_messages)
             assistant_chars_by_layer[layer].append(len(assistant_text))
             assistant_tokens_by_layer[layer].append(len(tokenizer.encode(assistant_text, add_special_tokens=False)))
+            if tqdm is None and progress_every > 0 and rows % progress_every == 0:
+                print(f"[regen] rows={rows}/{total_lines} layer={layer}", file=sys.stderr, flush=True)
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
 
     by_layer = {}
     for layer in sorted(layer_counter):
@@ -192,6 +211,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=1000)
     return parser.parse_args()
 
 
@@ -204,13 +224,22 @@ def main() -> None:
     output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else base / "reports" / args.date / "generated_cache_stats"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"Loading tokenizer from {args.tokenizer!r} (local_files_only={args.local_files_only})...",
+        file=sys.stderr,
+        flush=True,
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=args.local_files_only)
+    print("Counting split rows...", file=sys.stderr, flush=True)
     train_rows, train_parse_errors = count_jsonl(prepared_dir / "train_maiprofile_short_layers.jsonl")
     eval_dir = prepared_dir / "eval_datasets"
     eval_counts = {}
     if eval_dir.exists():
         for p in sorted(eval_dir.glob("*.jsonl")):
             eval_counts[p.name] = count_jsonl(p)[0]
+    regen_summary = analyze_regen(regen_path, tokenizer, progress_every=args.progress_every) if regen_path.exists() else {"path": str(regen_path), "exists": False}
+    print("Summarizing cache files...", file=sys.stderr, flush=True)
+    cache_summary = summarize_cache(cache_dir)
     summary = {
         "split": {
             "prepared_dir": str(prepared_dir),
@@ -219,8 +248,8 @@ def main() -> None:
             "eval_dir": str(eval_dir),
             "eval_counts": eval_counts,
         },
-        "regen": analyze_regen(regen_path, tokenizer) if regen_path.exists() else {"path": str(regen_path), "exists": False},
-        "cache": summarize_cache(cache_dir),
+        "regen": regen_summary,
+        "cache": cache_summary,
     }
     json_path = output_dir / "generated_cache_stats.json"
     md_path = output_dir / "generated_cache_stats.md"

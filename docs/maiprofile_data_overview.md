@@ -32,18 +32,18 @@ Token counts below were produced by `scripts/data/analyze_maiprofile_prompts.py`
 <|turn>model
 ```
 
-| layer | rows | p50 tokens | p95 tokens | max tokens |
-|---|---:|---:|---:|---:|
-| layer1_actual | 6,614 | 1,531 | 2,584 | 7,760 |
-| layer1_delta | 7,675 | 5,927 | 22,886 | 46,928 |
-| layer1_intent | 6,689 | 1,715 | 2,156 | 3,724 |
-| layer2_coarse_interest | 8,887 | 2,987 | 4,387 | 7,049 |
-| layer2_temporal | 6,626 | 1,955 | 2,725 | 7,436 |
-| layer3_commercial_interests | 8,875 | 5,627 | 8,133 | 13,018 |
-| layer3_persona | 8,867 | 3,209 | 5,423 | 10,589 |
-| layer3_seasonality | 8,865 | 583 | 852 | 1,558 |
-| layer4_biography | 8,907 | 4,118 | 7,815 | 13,558 |
-| layer4_commercial_preference | 8,309 | 2,859 | 3,930 | 6,367 |
+| layer | rows | MiB | p50 tokens | p95 tokens | p99 tokens | max tokens | assistant records | >2048 | >4096 | >8192 | >16384 | >32768 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| layer1_actual | 6,614 | 45.11 | 1,531 | 2,584 | 3,211 | 7,760 | 0 | 1,356 | 5 | 0 | 0 | 0 |
+| layer1_delta | 7,675 | 254.507 | 5,927 | 22,886 | 28,826 | 46,928 | 0 | 6,070 | 4,674 | 3,093 | 1,631 | 25 |
+| layer1_intent | 6,689 | 51.903 | 1,715 | 2,156 | 2,475 | 3,724 | 0 | 631 | 0 | 0 | 0 | 0 |
+| layer2_coarse_interest | 8,887 | 119.263 | 2,987 | 4,387 | 5,182 | 7,049 | 0 | 7,440 | 790 | 0 | 0 | 0 |
+| layer2_temporal | 6,626 | 55.04 | 1,955 | 2,725 | 3,284 | 7,436 | 0 | 2,762 | 15 | 0 | 0 | 0 |
+| layer3_commercial_interests | 8,875 | 224.681 | 5,627 | 8,133 | 9,203 | 13,018 | 0 | 8,875 | 7,500 | 414 | 0 | 0 |
+| layer3_persona | 8,867 | 139.961 | 3,209 | 5,423 | 6,421 | 10,589 | 0 | 6,823 | 2,258 | 5 | 0 | 0 |
+| layer3_seasonality | 8,865 | 23.266 | 583 | 852 | 993 | 1,558 | 0 | 0 | 0 | 0 | 0 | 0 |
+| layer4_biography | 8,907 | 143.0 | 4,118 | 7,815 | 9,795 | 13,558 | 0 | 7,215 | 4,490 | 325 | 0 | 0 |
+| layer4_commercial_preference | 8,309 | 100.446 | 2,859 | 3,930 | 4,627 | 6,367 | 0 | 8,309 | 287 | 0 | 0 | 0 |
 
 Total non-empty prompt rows: **80,314**.
 
@@ -195,22 +195,3 @@ DSpark note:
 
 - p50 2.9k, p95 3.9k, max 6.4k.
 - Good pilot candidate; 4k covers most, 8k covers nearly all.
-
-## Initial DSpark Suitability Guidance
-
-Recommended early pilot layers:
-
-1. `layer1_intent` — compact, likely good training signal.
-2. `layer1_actual` — compact/moderate, factual output.
-3. `layer2_temporal` — compact/moderate.
-4. `layer4_commercial_preference` — mostly within 4k, user-level output.
-5. `layer3_seasonality` — very short context; validate output length before prioritizing.
-
-Layers requiring longer-context planning:
-
-1. `layer1_delta` — extremely long tail, p95 22.9k.
-2. `layer3_commercial_interests` — p50 already 5.6k.
-3. `layer3_persona` — p95 5.4k.
-4. `layer4_biography` — p95 7.8k.
-
-Before full target-cache generation, run a response-generation pilot by layer and measure assistant token length. DSpark is most useful for layers with both substantial decode length and acceptable cache/training cost.

@@ -72,7 +72,7 @@ Training prompt JSONL uses the same schema expected by `scripts/data/generate_tr
 }
 ```
 
-Eval JSONL uses the format expected by `deepspec/eval/base_evaluator.py`:
+Eval JSONL uses the format expected by `deepspec/eval/base_evaluator.py`. It preserves the original message roles via `messages` and also writes a legacy single-turn fallback in `turns`:
 
 ```json
 {
@@ -80,11 +80,15 @@ Eval JSONL uses the format expected by `deepspec/eval/base_evaluator.py`:
   "source_layer": "layer1_actual",
   "user_id": "...",
   "prompt_hash": "...",
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user", "content": "..."}
+  ],
   "turns": ["<system prompt>\n\n<user prompt>"]
 }
 ```
 
-The evaluator currently supports one user turn, so the split script folds system content into the first eval turn. Training generation keeps the original `system + user` roles.
+The evaluator now prefers `messages` when present, so MAI Profile eval uses the same `system + user` structure as SGLang generation. `turns` is retained only for compatibility with the original eval dataset format.
 
 ## Step 1: Start SGLang
 

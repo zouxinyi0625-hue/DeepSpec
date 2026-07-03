@@ -43,13 +43,33 @@ def load_and_process_dataset(
             if not line:
                 continue
             row = json.loads(line)
+            messages = row.get("messages")
+            if messages is not None:
+                assert (
+                    isinstance(messages, list)
+                    and len(messages) > 0
+                    and all(
+                        isinstance(message, dict)
+                        and isinstance(message.get("role"), str)
+                        and isinstance(message.get("content"), str)
+                        for message in messages
+                    )
+                ), (
+                    f"{dataset_path}:{line_number} field `messages` must be a "
+                    "non-empty list of {role, content} objects."
+                )
+                row["messages"] = messages
+                row["turns"] = []
+                rows.append(row)
+                continue
             turns = row.get("turns")
             assert (
                 isinstance(turns, list)
                 and len(turns) > 0
                 and all(isinstance(turn, str) for turn in turns)
             ), (
-                f"{dataset_path}:{line_number} must contain a non-empty string list field `turns`."
+                f"{dataset_path}:{line_number} must contain either `messages` "
+                "or a non-empty string list field `turns`."
             )
             row["turns"] = turns[:1]
             rows.append(row)
@@ -545,7 +565,9 @@ class BaseEvaluator:
         for idx in iterator:
             seed_all(int(self.args.seed) + idx)
             instance = dataset[idx]
-            messages = [{"role": "user", "content": instance["turns"][0]}]
+            messages = instance.get("messages")
+            if messages is None:
+                messages = [{"role": "user", "content": instance["turns"][0]}]
             input_ids = encode_chat_messages(
                 self.tokenizer,
                 messages,

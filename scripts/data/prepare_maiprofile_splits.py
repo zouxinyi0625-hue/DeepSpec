@@ -160,6 +160,7 @@ def main() -> None:
                     "source_layer": record["source_layer"],
                     "user_id": record.get("user_id"),
                     "prompt_hash": record.get("prompt_hash"),
+                    "messages": record["conversations"],
                     "turns": [prompt_text_for_eval(record["conversations"])],
                 }, ensure_ascii=False) + "\n")
         summary["by_layer"][layer] = {

@@ -321,7 +321,8 @@ def parse_args() -> argparse.Namespace:
             "$AZURE_ML_INPUT_msndni/shares/users/zxy/maiprofile/reports/<date>/prompt_stats."
         ),
     )
-    parser.add_argument("--tokenizer", default="google/gemma-4-12B-it", help="Tokenizer/model name or local path.")
+    parser.add_argument("--tokenizer", default="google/gemma-4-12B-it", help="Tokenizer/model name or local path. Prefer a local model directory on AML, e.g. $AZURE_ML_INPUT_msndni/shares/users/zxy/models/Gemma-4-26B-A4B-it-deploy/text_only, to avoid HF Hub access.")
+    parser.add_argument("--local-files-only", action="store_true", help="Load tokenizer from local files/cache only; do not contact HuggingFace Hub.")
     parser.add_argument("--file-glob", default="*.jsonl")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional per-file row cap for quick profiling.")
     parser.add_argument("--thresholds", default="2048,4096,8192,16384,32768", help="Comma-separated max_length thresholds for truncation-risk reporting.")
@@ -371,7 +372,15 @@ def main() -> None:
     output_dir = resolve_output_dir(args, input_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    print(
+        f"Loading tokenizer from {args.tokenizer!r} (local_files_only={args.local_files_only})...",
+        file=sys.stderr,
+        flush=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer,
+        local_files_only=args.local_files_only,
+    )
     files = sorted(path for path in input_dir.glob(args.file_glob) if path.is_file())
     if not args.include_empty_files:
         files = [path for path in files if path.stat().st_size > 0]

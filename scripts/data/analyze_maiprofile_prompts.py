@@ -257,29 +257,65 @@ def write_markdown_report(summary: dict[str, Any], output_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze MAI Profile prompt JSONL files for DSpark data planning.")
-    parser.add_argument("--input-dir", required=True, help="Directory containing MAI Profile layer *.jsonl files.")
-    parser.add_argument("--output-dir", default=None, help="Output directory. Defaults to $MOUNT_DATA/dspark/maiprofile/reports/<date>.")
+    parser.add_argument(
+        "--input-dir",
+        default=None,
+        help=(
+            "Directory containing MAI Profile layer *.jsonl files. Defaults to "
+            "$AZURE_ML_INPUT_msndni/shares/users/zxy/maiprofile/raw_data/20260615."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "Output directory. Defaults to "
+            "$AZURE_ML_INPUT_msndni/shares/users/zxy/maiprofile/reports/<date>/prompt_stats."
+        ),
+    )
     parser.add_argument("--tokenizer", default="google/gemma-4-12B-it", help="Tokenizer/model name or local path.")
     parser.add_argument("--file-glob", default="*.jsonl")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional per-file row cap for quick profiling.")
     parser.add_argument("--thresholds", default="2048,4096,8192,16384,32768", help="Comma-separated max_length thresholds for truncation-risk reporting.")
     parser.add_argument("--sample-examples", type=int, default=3, help="Number of first/longest examples to keep per layer in JSON output.")
+    parser.add_argument(
+        "--include-empty-files",
+        action="store_true",
+        help="Include 0-byte or 0-row JSONL files in the summary. Defaults to skipping them.",
+    )
     return parser.parse_args()
+
+
+def get_msndni_mount() -> Path:
+    mount = os.environ.get("AZURE_ML_INPUT_msndni")
+    if not mount:
+        raise SystemExit(
+            "AZURE_ML_INPUT_msndni is not set. Export it or pass --input-dir and --output-dir explicitly."
+        )
+    return Path(mount)
+
+
+def resolve_input_dir(args: argparse.Namespace) -> Path:
+    if args.input_dir:
+        return Path(args.input_dir).expanduser().resolve()
+    return (get_msndni_mount() / "shares/users/zxy/maiprofile/raw_data/20260615").resolve()
 
 
 def resolve_output_dir(args: argparse.Namespace, input_dir: Path) -> Path:
     if args.output_dir:
-        return Path(args.output_dir)
-    mount_data = os.environ.get("MOUNT_DATA")
-    if not mount_data:
-        raise SystemExit("MOUNT_DATA is not set. Pass --output-dir explicitly or export MOUNT_DATA before running.")
+        return Path(args.output_dir).expanduser().resolve()
     date_name = input_dir.name
-    return Path(mount_data) / "dspark" / "maiprofile" / "reports" / date_name
+    return (
+        get_msndni_mount()
+        / "shares/users/zxy/maiprofile/reports"
+        / date_name
+        / "prompt_stats"
+    ).resolve()
 
 
 def main() -> None:
     args = parse_args()
-    input_dir = Path(args.input_dir).expanduser().resolve()
+    input_dir = resolve_input_dir(args)
     if not input_dir.is_dir():
         raise SystemExit(f"input dir not found: {input_dir}")
     thresholds = [int(item) for item in args.thresholds.split(",") if item.strip()]
@@ -288,19 +324,25 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     files = sorted(path for path in input_dir.glob(args.file_glob) if path.is_file())
+    if not args.include_empty_files:
+        files = [path for path in files if path.stat().st_size > 0]
     if not files:
-        raise SystemExit(f"no files matched {args.file_glob!r} under {input_dir}")
+        raise SystemExit(f"no non-empty files matched {args.file_glob!r} under {input_dir}")
 
-    layers = [
-        analyze_file(
+    layers = []
+    skipped_empty = []
+    for path in files:
+        layer_summary = analyze_file(
             path,
             tokenizer=tokenizer,
             max_rows=args.max_rows,
             length_thresholds=thresholds,
             sample_examples=args.sample_examples,
         )
-        for path in files
-    ]
+        if not args.include_empty_files and int(layer_summary["rows"]) == 0:
+            skipped_empty.append(str(path))
+            continue
+        layers.append(layer_summary)
     summary = {
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
@@ -311,6 +353,7 @@ def main() -> None:
         "total_rows": sum(layer["rows"] for layer in layers),
         "total_bytes": sum(layer["bytes"] for layer in layers),
         "total_mib": round(sum(layer["bytes"] for layer in layers) / 1024**2, 3),
+        "skipped_empty_files": skipped_empty,
         "layers": layers,
     }
 
@@ -358,6 +401,7 @@ def main() -> None:
         "csv": str(csv_path),
         "total_rows": summary["total_rows"],
         "total_mib": summary["total_mib"],
+        "skipped_empty_files": summary["skipped_empty_files"],
     }, indent=2))
 
 

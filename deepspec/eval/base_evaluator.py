@@ -467,9 +467,21 @@ class BaseEvaluator:
     def __init__(self, local_rank: int, args):
         self.args = args
         self.device, self.global_rank, self.world_size = init_dist(local_rank)
+        if self.global_rank == 0:
+            print(
+                f"[eval rank0] dist initialized: world_size={self.world_size} device={self.device}",
+                flush=True,
+            )
         self.tasks = args.tasks
 
+        if self.global_rank == 0:
+            print(
+                f"[eval rank0] building models target={args.target_name_or_path} draft={args.draft_name_or_path}",
+                flush=True,
+            )
         self.target_model, self.draft_model, self.tokenizer = self.build_models()
+        if self.global_rank == 0:
+            print("[eval rank0] models loaded", flush=True)
         self.metrics_rows: list[dict[str, object]] = []
 
     @property

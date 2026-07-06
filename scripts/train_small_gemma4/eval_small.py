@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 import torch
 from transformers import AutoConfig
@@ -68,12 +69,25 @@ def parse_args():
 
 
 def main(local_rank: int, args):
+    start_time = time.perf_counter()
     if local_rank == 0:
         print(json.dumps(args, indent=4, cls=CustomJSONEncoder), flush=True)
+        print(f"[eval rank0] loading draft config from {args.draft_name_or_path}", flush=True)
     draft_config = AutoConfig.from_pretrained(args.draft_name_or_path)
-    evaluator_cls = EVALUATORS[draft_config.architectures[0]]
+    assert draft_config.architectures, "Draft checkpoint config must define architectures."
+    architecture = draft_config.architectures[0]
+    evaluator_cls = EVALUATORS[architecture]
+    if local_rank == 0:
+        print(
+            f"[eval rank0] architecture={architecture} evaluator={evaluator_cls.__name__}",
+            flush=True,
+        )
     evaluator = evaluator_cls(local_rank, args)
+    if local_rank == 0:
+        print(f"[eval rank0] evaluator initialized in {time.perf_counter() - start_time:.1f}s", flush=True)
     evaluator.evaluate()
+    if local_rank == 0:
+        print(f"[eval rank0] evaluate complete in {time.perf_counter() - start_time:.1f}s", flush=True)
     evaluator.clean_up()
 
 

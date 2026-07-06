@@ -98,6 +98,46 @@ Important distinction:
 - The target cache still used `config/dspark/dspark_gemma4_12b_small.py`, whose `data.max_length` is **1024**.
 - The low valid ratio is therefore expected: many `prompt + assistant` sequences exceed 1024 tokens, so the assistant portion is truncated or leaves too few supervised tokens for `min_loss_tokens=14`.
 
+## 1024-Context DSpark Eval Results
+
+Run:
+
+```text
+checkpoint: dspark_block5_gemma4_12b_maiprofile_short_1024ctx_10k/step_latest
+target model: google/gemma-4-12B-it
+eval samples: 200 per short layer
+cache max_length: 1024
+generation max_tokens: 2048
+valid cache samples: 10,077 / 36,103
+```
+
+Acceptance metrics:
+
+| dataset | #propose | accept_len | verify_rate | accept@0 | accept@1 | accept@2 | accept@3 | accept@4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 5.00+1 | 2.71 | 0.4520 | 0.4952 | 0.3634 | 0.3123 | 0.2818 | 0.2606 |
+| maiprofile_layer1_intent | 5.00+1 | 1.26 | 0.2095 | 0.1948 | 0.0434 | 0.0127 | 0.0044 | 0.0016 |
+| maiprofile_layer2_temporal | 5.00+1 | 1.21 | 0.2011 | 0.1518 | 0.0373 | 0.0109 | 0.0048 | 0.0020 |
+| maiprofile_layer3_seasonality | 5.00+1 | 5.70 | 0.9509 | 0.9725 | 0.9609 | 0.9439 | 0.9211 | 0.9088 |
+| maiprofile_layer4_commercial_preference | 5.00+1 | 1.04 | 0.1734 | 0.0347 | 0.0045 | 0.0010 | 0.0004 | 0.0001 |
+
+Confidence-head reliability:
+
+| dataset | samples | proposals | ece_mean | auc_mean | brier_mean | pred_mean | target_mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 200 | 27,775 | 0.5106 | 0.9252 | 0.4310 | 0.8533 | 0.3427 |
+| maiprofile_layer1_intent | 200 | 46,750 | 0.8148 | 0.7133 | 0.7316 | 0.8662 | 0.0514 |
+| maiprofile_layer2_temporal | 200 | 54,116 | 0.8178 | 0.8005 | 0.7301 | 0.8592 | 0.0414 |
+| maiprofile_layer3_seasonality | 200 | 16,193 | 0.0522 | 0.8551 | 0.0535 | 0.9937 | 0.9415 |
+| maiprofile_layer4_commercial_preference | 200 | 86,080 | 0.8909 | 0.6811 | 0.8210 | 0.8990 | 0.0081 |
+
+Observed pattern:
+
+- `layer3_seasonality` is highly accepted across all five draft positions.
+- `layer1_actual` is moderately accepted and retains non-trivial suffix acceptance.
+- `layer1_intent`, `layer2_temporal`, and especially `layer4_commercial_preference` have very low suffix acceptance.
+- The confidence head is severely over-confident on most layers except `layer3_seasonality` (`pred_mean` far above `target_mean`).
+
 ## Layer Semantics
 
 ### `layer1_delta` — Layer 1: Delta Interest Extraction

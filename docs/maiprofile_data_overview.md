@@ -118,6 +118,26 @@ other short layers: 0 samples
 
 This explains the 1024-context eval pattern: the model was trained almost entirely on `layer3_seasonality` plus a small `layer1_actual` subset. It did not receive any supervised cache samples for `layer1_intent`, `layer2_temporal`, or `layer4_commercial_preference` under `max_length=1024`.
 
+### Key interpretation of the 1024-context cache
+
+The 10,077 valid cache samples should **not** be interpreted as a balanced MAI Profile short-layer training set. The effective supervised training distribution is:
+
+| source layer | valid cache samples | share of valid cache |
+|---|---:|---:|
+| `layer3_seasonality` | 8,587 | 85.21% |
+| `layer1_actual` | 1,490 | 14.79% |
+| `layer1_intent` | 0 | 0.00% |
+| `layer2_temporal` | 0 | 0.00% |
+| `layer4_commercial_preference` | 0 | 0.00% |
+
+The valid samples are also mostly not naturally short examples. Most were truncated to the `max_length=1024` boundary; a sample becomes valid only if enough assistant tokens still remain after truncation (`loss_mask.sum >= 14`). This means:
+
+- `layer3_seasonality` remains valid because its prompt is short enough that a substantial assistant suffix remains inside the first 1024 tokens (`loss p50=377`).
+- `layer1_actual` has a small valid subset (`loss p95=116`), mostly shorter examples where some assistant tokens survive truncation.
+- `layer1_intent`, `layer2_temporal`, and `layer4_commercial_preference` have `loss p50=0` and `loss p95=0` after truncation, so they contribute no supervised training samples.
+
+Therefore, low train loss in this run primarily means the draft model fit the truncated `seasonality` distribution and a small `actual` subset. It does **not** demonstrate that the draft learned the full mixed MAI Profile distribution. The eval results are consistent with this: `layer3_seasonality` is strong, `layer1_actual` is moderate, and layers with zero cache samples have very low acceptance.
+
 ## 1024-Context DSpark Eval Results
 
 Run:

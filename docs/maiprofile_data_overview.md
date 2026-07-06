@@ -98,6 +98,26 @@ Important distinction:
 - The target cache still used `config/dspark/dspark_gemma4_12b_small.py`, whose `data.max_length` is **1024**.
 - The low valid ratio is therefore expected: many `prompt + assistant` sequences exceed 1024 tokens, so the assistant portion is truncated or leaves too few supervised tokens for `min_loss_tokens=14`.
 
+Cache eligibility by layer under `max_length=1024`:
+
+| layer | rows | valid | valid % | >1024 | >1024 % | untrunc p50 | untrunc p95 | trunc p50 | loss p50 | loss p95 | assistant p50 | assistant p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| layer1_actual | 6,414 | 1,490 | 23.2% | 5,428 | 84.6% | 2,041 | 3,450 | 1,024 | 0 | 116 | 474 | 916 |
+| layer1_intent | 6,489 | 0 | 0.0% | 6,489 | 100.0% | 2,031 | 2,751 | 1,024 | 0 | 0 | 308 | 597 |
+| layer2_temporal | 6,426 | 0 | 0.0% | 6,426 | 100.0% | 2,307 | 3,384 | 1,024 | 0 | 0 | 345 | 666 |
+| layer3_seasonality | 8,665 | 8,587 | 99.1% | 6,599 | 76.2% | 1,562 | 2,786 | 1,024 | 377 | 534 | 973 | 1,930 |
+| layer4_commercial_preference | 8,109 | 0 | 0.0% | 8,109 | 100.0% | 3,461 | 4,868 | 1,024 | 0 | 0 | 586 | 968 |
+
+The actual target cache therefore contains only two source layers:
+
+```text
+layer3_seasonality: 8,587 samples
+layer1_actual:      1,490 samples
+other short layers: 0 samples
+```
+
+This explains the 1024-context eval pattern: the model was trained almost entirely on `layer3_seasonality` plus a small `layer1_actual` subset. It did not receive any supervised cache samples for `layer1_intent`, `layer2_temporal`, or `layer4_commercial_preference` under `max_length=1024`.
+
 ## 1024-Context DSpark Eval Results
 
 Run:

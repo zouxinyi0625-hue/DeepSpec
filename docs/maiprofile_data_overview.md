@@ -138,6 +138,69 @@ The valid samples are also mostly not naturally short examples. Most were trunca
 
 Therefore, low train loss in this run primarily means the draft model fit the truncated `seasonality` distribution and a small `actual` subset. It does **not** demonstrate that the draft learned the full mixed MAI Profile distribution. The eval results are consistent with this: `layer3_seasonality` is strong, `layer1_actual` is moderate, and layers with zero cache samples have very low acceptance.
 
+## 4096-Context Target Cache and Eval Results
+
+Run:
+
+```text
+checkpoint: dspark_block5_gemma4_12b_maiprofile_short_4096ctx_36k/step_latest
+target model: google/gemma-4-12B-it
+eval samples: 200 per short layer
+cache max_length: 4096
+generation max_tokens: 2048
+valid cache samples: 35,800 / 36,103
+cache size: 3466.912 GiB
+```
+
+4096 cache eligibility by layer:
+
+| layer | rows | valid | valid % | >4096 | >4096 % | untrunc p50 | untrunc p95 | trunc p50 | loss p50 | loss p95 | assistant p50 | assistant p95 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| layer1_actual | 6,414 | 6,409 | 99.9% | 85 | 1.3% | 2,041 | 3,450 | 2,041 | 475 | 897 | 474 | 916 |
+| layer1_intent | 6,489 | 6,489 | 100.0% | 9 | 0.1% | 2,031 | 2,751 | 2,031 | 310 | 598 | 308 | 597 |
+| layer2_temporal | 6,426 | 6,411 | 99.8% | 84 | 1.3% | 2,307 | 3,384 | 2,307 | 345 | 649 | 345 | 666 |
+| layer3_seasonality | 8,665 | 8,665 | 100.0% | 0 | 0.0% | 1,562 | 2,786 | 1,562 | 975 | 1,932 | 973 | 1,930 |
+| layer4_commercial_preference | 8,109 | 7,826 | 96.5% | 1,778 | 21.9% | 3,461 | 4,868 | 3,461 | 503 | 826 | 586 | 968 |
+
+Effective 4096 supervised cache distribution:
+
+| source layer | valid cache samples | share of valid cache |
+|---|---:|---:|
+| `layer1_actual` | 6,409 | 17.90% |
+| `layer1_intent` | 6,489 | 18.13% |
+| `layer2_temporal` | 6,411 | 17.91% |
+| `layer3_seasonality` | 8,665 | 24.20% |
+| `layer4_commercial_preference` | 7,826 | 21.86% |
+
+Compared with the 1024-context cache, the 4096-context cache is now a genuinely mixed short-layer training set. `layer1_intent`, `layer2_temporal`, and `layer4_commercial_preference` now contribute supervised samples instead of being filtered out.
+
+4096 acceptance metrics:
+
+| dataset | #propose | accept_len | verify_rate | accept@0 | accept@1 | accept@2 | accept@3 | accept@4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 4.99+1 | 3.65 | 0.6095 | 0.7316 | 0.5825 | 0.4898 | 0.4432 | 0.4116 |
+| maiprofile_layer1_intent | 4.98+1 | 3.46 | 0.5776 | 0.7311 | 0.5600 | 0.4525 | 0.3847 | 0.3437 |
+| maiprofile_layer2_temporal | 4.99+1 | 3.96 | 0.6604 | 0.8072 | 0.6754 | 0.5704 | 0.4900 | 0.4237 |
+| maiprofile_layer3_seasonality | 5.00+1 | 5.88 | 0.9813 | 0.9914 | 0.9861 | 0.9789 | 0.9704 | 0.9632 |
+| maiprofile_layer4_commercial_preference | 5.00+1 | 3.97 | 0.6627 | 0.7931 | 0.6628 | 0.5740 | 0.4946 | 0.4533 |
+
+4096 confidence-head reliability:
+
+| dataset | samples | proposals | ece_mean | auc_mean | brier_mean | pred_mean | target_mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 200 | 20,646 | 0.0313 | 0.9492 | 0.0815 | 0.5631 | 0.5319 |
+| maiprofile_layer1_intent | 200 | 17,093 | 0.0478 | 0.9120 | 0.1110 | 0.5426 | 0.4948 |
+| maiprofile_layer2_temporal | 200 | 16,574 | 0.0487 | 0.8735 | 0.1351 | 0.6421 | 0.5936 |
+| maiprofile_layer3_seasonality | 200 | 15,729 | 0.0049 | 0.9751 | 0.0127 | 0.9825 | 0.9780 |
+| maiprofile_layer4_commercial_preference | 200 | 22,493 | 0.0396 | 0.9295 | 0.1039 | 0.6338 | 0.5957 |
+
+Observed 4096 pattern:
+
+- The 4096 cache fixes the 1024-context data-distribution issue: all short layers now have high valid-cache coverage.
+- Acceptance improves dramatically on the previously zero-supervision layers (`layer1_intent`, `layer2_temporal`, `layer4_commercial_preference`).
+- `layer3_seasonality` remains the easiest/highest-acceptance layer, reaching near-perfect prefix acceptance.
+- Confidence calibration also improves substantially: `pred_mean` is close to `target_mean` and ECE is low across all layers.
+
 ## 1024-Context DSpark Eval Results
 
 Run:

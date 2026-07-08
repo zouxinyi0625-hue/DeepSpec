@@ -201,6 +201,56 @@ Observed 4096 pattern:
 - `layer3_seasonality` remains the easiest/highest-acceptance layer, reaching near-perfect prefix acceptance.
 - Confidence calibration also improves substantially: `pred_mean` is close to `target_mean` and ECE is low across all layers.
 
+## 4096-Context, Block-Size 7 Eval Results
+
+Run:
+
+```text
+checkpoint: dspark_block7_gemma4_12b_maiprofile_short_4096ctx_36k/step_latest
+target model: google/gemma-4-12B-it
+eval samples: 200 per short layer
+cache max_length: 4096
+block_size: 7
+```
+
+Acceptance metrics:
+
+| dataset | #propose | accept_len | verify_rate | accept@0 | accept@1 | accept@2 | accept@3 | accept@4 | accept@5 | accept@6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 6.99+1 | 4.09 | 0.5122 | 0.7034 | 0.5452 | 0.4461 | 0.3945 | 0.3593 | 0.3361 | 0.3166 |
+| maiprofile_layer1_intent | 6.96+1 | 3.69 | 0.4628 | 0.6961 | 0.5078 | 0.3980 | 0.3340 | 0.2947 | 0.2658 | 0.2093 |
+| maiprofile_layer2_temporal | 6.98+1 | 4.45 | 0.5582 | 0.7916 | 0.6513 | 0.5433 | 0.4632 | 0.4022 | 0.3433 | 0.2739 |
+| maiprofile_layer3_seasonality | 6.99+1 | 7.76 | 0.9714 | 0.9885 | 0.9830 | 0.9757 | 0.9694 | 0.9611 | 0.9537 | 0.9433 |
+| maiprofile_layer4_commercial_preference | 6.99+1 | 4.53 | 0.5664 | 0.7558 | 0.6233 | 0.5414 | 0.4675 | 0.4271 | 0.3832 | 0.3337 |
+
+Confidence-head reliability:
+
+| dataset | samples | proposals | ece_mean | auc_mean | brier_mean | pred_mean | target_mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 200 | 18,412 | 0.0385 | 0.9440 | 0.0845 | 0.4817 | 0.4432 |
+| maiprofile_layer1_intent | 200 | 16,067 | 0.0450 | 0.9156 | 0.1028 | 0.4320 | 0.3871 |
+| maiprofile_layer2_temporal | 200 | 14,698 | 0.0395 | 0.8779 | 0.1307 | 0.5355 | 0.4960 |
+| maiprofile_layer3_seasonality | 200 | 11,919 | 0.0114 | 0.8886 | 0.0210 | 0.9789 | 0.9678 |
+| maiprofile_layer4_commercial_preference | 200 | 19,907 | 0.0418 | 0.9351 | 0.1007 | 0.5423 | 0.5047 |
+
+Block-size 7 vs block-size 5 summary:
+
+| dataset | block5 accept_len | block7 accept_len | delta | block5 verify_rate | block7 verify_rate | delta |
+|---|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 3.65 | 4.09 | +0.44 | 0.6095 | 0.5122 | -0.0973 |
+| maiprofile_layer1_intent | 3.46 | 3.69 | +0.23 | 0.5776 | 0.4628 | -0.1148 |
+| maiprofile_layer2_temporal | 3.96 | 4.45 | +0.49 | 0.6604 | 0.5582 | -0.1022 |
+| maiprofile_layer3_seasonality | 5.88 | 7.76 | +1.88 | 0.9813 | 0.9714 | -0.0099 |
+| maiprofile_layer4_commercial_preference | 3.97 | 4.53 | +0.56 | 0.6627 | 0.5664 | -0.0963 |
+
+Observed block-size 7 pattern:
+
+- Block-size 7 increases absolute accepted tokens per verification (`accept_len`) for every layer.
+- As expected, `verify_rate` drops versus block-size 5 on the harder layers because more late-position draft tokens are proposed and suffix acceptance decays.
+- `layer3_seasonality` remains extremely strong even at position 6 (`accept@6=0.9433`), so larger blocks are especially beneficial for this template-like layer.
+- For non-seasonality layers, late positions still have meaningful acceptance (`accept@6` roughly 0.21–0.33), but the tradeoff between larger proposal length and lower verify efficiency should be evaluated with end-to-end throughput.
+- Confidence calibration remains good for block-size 7: ECE is low across all layers and `pred_mean` stays close to `target_mean`.
+
 ## 1024-Context DSpark Eval Results
 
 Run:

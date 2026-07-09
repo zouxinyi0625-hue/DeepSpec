@@ -201,6 +201,73 @@ Observed 4096 pattern:
 - `layer3_seasonality` remains the easiest/highest-acceptance layer, reaching near-perfect prefix acceptance.
 - Confidence calibration also improves substantially: `pred_mean` is close to `target_mean` and ECE is low across all layers.
 
+## DSpark (block5) vs Google MTP baseline — per-layer, same target
+
+Comparison of our DSpark draft (block5, 4096-context, above) against the **Google
+official MTP assistant** baseline, benchmarked on the **same** MAI Profile eval
+layers. The MTP numbers are online `vllm bench serve` runs recorded in
+`vllm-msn/benchmarks/gemma4_12b_fp8/RESULTS.md` (config `12b_e011_mtp`, FP8
+`gemma-4-12B-it` target + assistant, `spec_tokens=5`, 200 prompts/layer,
+unlimited concurrency).
+
+Both sides use the **same target** (`google/gemma-4-12B-it`), the **same 5 short
+eval layers**, **200 prompts/layer**, and **spec/block = 5**, so this is an
+apples-to-apples draft-quality comparison.
+
+> **Metric caveat.** `accept_len` is defined identically on both sides (mean
+> accepted tokens per verification, incl. the always-verified target token) and
+> is **directly comparable**. The rate columns are **not** the same statistic:
+> MTP `accept rate` = accepted_tokens / draft_tokens (from vllm bench serve),
+> while DSpark `verify_rate` is our evaluator's per-proposal rate — e.g.
+> `layer1_intent` has identical accept_len 3.46 on both sides yet rate 49.27 vs
+> 57.76, confirming the rate definitions differ. **Judge by accept_len and
+> per-position acceptance, not the single rate number.**
+
+### Accept length (primary; higher is better)
+
+| Layer | MTP accept_len | DSpark accept_len | Winner |
+|---|---:|---:|:--|
+| layer3_seasonality | **5.90** | 5.88 | ~tie (MTP +0.02) |
+| layer1_actual | **4.37** | 3.65 | **MTP +0.72** |
+| layer4_commercial_preference | **4.09** | 3.97 | MTP +0.12 |
+| layer2_temporal | 3.54 | **3.96** | **DSpark +0.42** |
+| layer1_intent | 3.46 | 3.46 | tie |
+| **Equal-weight mean** | **4.27** | 4.18 | MTP slightly ahead |
+
+### Per-position acceptance (%) — pos0 = first drafted token (highest leverage)
+
+| Layer | MTP pos0 | DSpark pos0 | MTP pos4 | DSpark pos4 |
+|---|---:|---:|---:|---:|
+| layer3_seasonality | 99.68 | 99.14 | 95.45 | **96.32** |
+| layer1_actual | **84.63** | 73.16 | **53.47** | 41.16 |
+| layer4_commercial_preference | **83.97** | 79.31 | 44.62 | **45.33** |
+| layer2_temporal | 77.24 | **80.72** | 31.49 | **42.37** |
+| layer1_intent | **73.97** | 73.11 | 32.27 | **34.37** |
+
+Reference rate columns (different definitions — see caveat): MTP accept rate /
+DSpark verify_rate — seasonality 97.91 / 98.13, actual 67.30 / 60.95, commercial
+61.88 / 66.27, temporal 50.78 / 66.04, intent 49.27 / 57.76.
+
+### Interpretation
+
+- **DSpark (block5) does not yet beat the MTP baseline overall.** On accept_len:
+  MTP wins 2 layers (actual +0.72, commercial +0.12), ties 2 (seasonality,
+  intent), DSpark wins 1 (temporal +0.42). Equal-weight mean accept_len is MTP
+  4.27 vs DSpark 4.18 — MTP is still slightly ahead.
+- **DSpark's strength is the suffix (slower tail decay).** On `layer2_temporal`
+  and `layer4_commercial_preference`, DSpark's pos4 acceptance overtakes MTP
+  (42.37 vs 31.49; 45.33 vs 44.62) — consistent with DSpark's semi-autoregressive
+  head restoring intra-block dependencies so later positions decay less.
+- **But MTP wins the first token almost everywhere** (pos0: MTP ahead on 4/5
+  layers, +11.5 pts on `layer1_actual`). Because speculative decoding is
+  prefix-matched, pos0 has the highest leverage, so MTP's first-token edge keeps
+  its overall accept_len ahead despite DSpark's flatter tail.
+- Both saturate on `layer3_seasonality` (~5.9) — an easy, template-like layer.
+- **Caveat on block size.** This compares DSpark **block5** to MTP **spec=5**
+  (fair). Our DSpark **block7** run has higher accept_len on temporal/commercial
+  (4.45 / 4.53), but block7 ≠ spec5, so it is **not** directly comparable here —
+  a fair block7 comparison needs an MTP run at `spec_tokens=7`.
+
 ## 4096-Context, Block-Size 7 Eval Results
 
 Run:

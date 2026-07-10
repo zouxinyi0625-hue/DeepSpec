@@ -318,6 +318,68 @@ Observed block-size 7 pattern:
 - For non-seasonality layers, late positions still have meaningful acceptance (`accept@6` roughly 0.21–0.33), but the tradeoff between larger proposal length and lower verify efficiency should be evaluated with end-to-end throughput.
 - Confidence calibration remains good for block-size 7: ECE is low across all layers and `pred_mean` stays close to `target_mean`.
 
+## Pretrained (Open-Source) DSpark block7 — Zero-Shot Baseline
+
+To separate "how much does maiprofile training help" from "how good is DSpark
+out of the box", we also evaluated the **public pretrained** DSpark block7
+checkpoint (`dspark_gemma4_12b_block7`, trained on Open-PerfectBlend, **not**
+fine-tuned on maiprofile) on the same maiprofile eval layers.
+
+Run:
+
+```text
+checkpoint: dspark_gemma4_12b_block7 (public pretrained, NOT maiprofile-trained)
+target model: google/gemma-4-12B-it
+eval samples: 200 per short layer
+cache max_length: 4096
+block_size: 7
+```
+
+Acceptance metrics:
+
+| dataset | #propose | accept_len | verify_rate | accept@0 | accept@1 | accept@2 | accept@3 | accept@4 | accept@5 | accept@6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 6.98+1 | 4.90 | 0.6140 | 0.8375 | 0.6990 | 0.5985 | 0.5248 | 0.4625 | 0.4143 | 0.3796 |
+| maiprofile_layer1_intent | 6.94+1 | 3.41 | 0.4300 | 0.7518 | 0.5178 | 0.3712 | 0.2901 | 0.2293 | 0.1653 | 0.1160 |
+| maiprofile_layer2_temporal | 6.95+1 | 3.46 | 0.4352 | 0.7751 | 0.5624 | 0.4008 | 0.2890 | 0.2106 | 0.1485 | 0.0962 |
+| maiprofile_layer3_seasonality | 6.99+1 | 7.80 | 0.9761 | 0.9979 | 0.9947 | 0.9900 | 0.9829 | 0.9731 | 0.9488 | 0.9250 |
+| maiprofile_layer4_commercial_preference | 6.98+1 | 4.02 | 0.5035 | 0.7786 | 0.6232 | 0.4967 | 0.3935 | 0.3229 | 0.2453 | 0.1687 |
+
+Confidence-head reliability:
+
+| dataset | samples | proposals | ece_mean | auc_mean | brier_mean | pred_mean | target_mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 200 | 15,361 | 0.0615 | 0.9355 | 0.0939 | 0.6212 | 0.5597 |
+| maiprofile_layer1_intent | 200 | 17,261 | 0.1173 | 0.8930 | 0.1334 | 0.4667 | 0.3494 |
+| maiprofile_layer2_temporal | 200 | 18,977 | 0.1109 | 0.8642 | 0.1377 | 0.4660 | 0.3552 |
+| maiprofile_layer3_seasonality | 200 | 11,856 | 0.0179 | 0.8612 | 0.0217 | 0.9908 | 0.9732 |
+| maiprofile_layer4_commercial_preference | 200 | 22,338 | 0.1134 | 0.8983 | 0.1351 | 0.5463 | 0.4329 |
+
+Pretrained vs maiprofile-trained block7 (accept_len, both block7 / 4096 / same eval):
+
+| dataset | pretrained accept_len | maiprofile-trained accept_len | delta |
+|---|---:|---:|---:|
+| maiprofile_layer1_actual | 4.90 | 4.09 | **-0.81** |
+| maiprofile_layer1_intent | 3.41 | 3.69 | +0.28 |
+| maiprofile_layer2_temporal | 3.46 | 4.45 | **+0.99** |
+| maiprofile_layer3_seasonality | 7.80 | 7.76 | -0.04 |
+| maiprofile_layer4_commercial_preference | 4.02 | 4.53 | +0.51 |
+| **Equal-weight mean** | **4.72** | **4.90** | **+0.18** |
+
+Interpretation:
+
+- The public pretrained DSpark is already a **strong zero-shot baseline** on
+  maiprofile (equal-weight mean accept_len 4.72), because these layers still
+  look like generic instruction-following to a well-trained drafter.
+- maiprofile training gives a modest net gain (+0.18 mean), concentrated on the
+  free-form layers `layer2_temporal` (+0.99) and `layer4_commercial_preference`
+  (+0.51) whose distribution differs most from Open-PerfectBlend.
+- On `layer1_actual` the pretrained model is actually **higher** (4.90 vs 4.09).
+  Our maiprofile run was only 2,000 steps (block7), so this likely reflects
+  undertraining rather than a real regression — worth confirming with a longer run.
+- `layer3_seasonality` is saturated (~7.8) for both — a template-like layer any
+  competent drafter handles, so training buys nothing there.
+
 ## 1024-Context DSpark Eval Results
 
 Run:

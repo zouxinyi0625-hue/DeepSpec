@@ -12,7 +12,9 @@ set -euo pipefail
 # 2000 train steps each, checkpoint every 500. All stdout+stderr is shown in
 # the terminal AND written to a log file on the mount (via tee at the end).
 
-REPO=/scratch/azureml/cr/j/62762bfeddfd4c1b8e0df81ac7b09742/exe/wd/DeepSpec
+# Run from wherever this script lives (the DeepSpec repo root). No hard-coded
+# job path -- works on any machine as long as you `bash run.sh` inside DeepSpec.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${REPO}"
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7

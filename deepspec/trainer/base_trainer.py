@@ -294,16 +294,24 @@ class BaseTrainer:
             start_global_offset_samples=start_offset_samples,
             num_samples=num_samples,
         )
-        return DataLoader(
-            self.train_dataset,
+        num_workers = int(self.args.data.num_workers)
+        # persistent_workers and prefetch_factor are only valid when workers > 0.
+        # Allow num_workers=0 (single-process loading) to avoid the multiprocessing
+        # dataloader deadlock (futex_wait) seen on the mount filesystem.
+        loader_kwargs = dict(
             batch_size=int(self.args.train.local_batch_size),
             sampler=sampler,
             collate_fn=self.data_collator_cls(),
-            num_workers=int(self.args.data.num_workers),
+            num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True,
-            prefetch_factor=4,
+        )
+        if num_workers > 0:
+            loader_kwargs["persistent_workers"] = True
+            loader_kwargs["prefetch_factor"] = 4
+        return DataLoader(
+            self.train_dataset,
+            **loader_kwargs,
         )
 
     def run_batch(self, batch):

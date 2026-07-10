@@ -15,6 +15,9 @@ model = dict(
     ttt_length=7,
     step_loss_decay=0.8,
     draft_num_hidden_layers=1,
+    # Optional warm-start from a pretrained Eagle3 draft checkpoint (local path
+    # or HF id). None = from scratch. Override: --opts model.pretrained_draft_path=...
+    pretrained_draft_path=None,
 )
 
 train = dict(

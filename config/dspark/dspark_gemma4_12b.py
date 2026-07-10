@@ -16,6 +16,9 @@ model = dict(
     target_layer_ids=[5, 17, 29, 41, 46],
     mask_token_id=4,
     num_anchors=512,
+    # Optional warm-start from a pretrained DSpark draft checkpoint (local path
+    # or HF id). None = from scratch. Override: --opts model.pretrained_draft_path=...
+    pretrained_draft_path=None,
 
     # markov head
     markov_rank=256,

@@ -20,6 +20,10 @@ model = dict(
     target_layer_ids=[5, 17, 29, 41, 46],
     mask_token_id=4,
     num_anchors=128,
+    # Optional warm-start: local path or HF id of a pretrained DSpark draft
+    # checkpoint. None = train draft from scratch. Overridable via
+    # --opts "model.pretrained_draft_path=/path/to/ckpt".
+    pretrained_draft_path=None,
 
     # Markov head: DSpark = DFlash-style backbone + lightweight transition bias.
     markov_rank=256,

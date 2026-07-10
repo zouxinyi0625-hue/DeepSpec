@@ -42,8 +42,42 @@ def parse_args():
     parser.add_argument("--tensorboard-dir", type=str, default=None)
     parser.add_argument("--step", type=int, default=None,help=("step for tensorboard logging"),)
     parser.add_argument("--seed", type=int, default=980406)
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        default=None,
+        help=(
+            "Directory holding <task>.jsonl eval files. Defaults to "
+            "./eval_datasets. Point this at the maiprofile eval_datasets dir "
+            "on the mount to eval on maiprofile."
+        ),
+    )
+    parser.add_argument(
+        "--tasks",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated task spec 'name:num_samples' to override the "
+            "default public benchmark suite. Example: "
+            "'maiprofile_layer3_seasonality:200'. num_samples optional "
+            "(defaults to all rows in the file)."
+        ),
+    )
     args = parser.parse_args()
-    args.tasks = list(TASKS)
+    if args.tasks:
+        parsed_tasks = []
+        for item in args.tasks.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if ":" in item:
+                name, count = item.rsplit(":", 1)
+                parsed_tasks.append((name.strip(), int(count)))
+            else:
+                parsed_tasks.append((item, None))
+        args.tasks = parsed_tasks
+    else:
+        args.tasks = list(TASKS)
     return args
 
 

@@ -44,6 +44,11 @@ TARGET=google/gemma-4-12B-it
 EVAL_MAX_NEW_TOKENS=512
 EVAL_TEMPERATURE=1.0
 
+# Dataloader workers. eagle3 config defaults to 4 which deadlocked on this mount
+# (futex_wait, read_bytes=0). DSpark ran fine at 2. Set 0 to fully disable
+# worker subprocesses if 2 still hangs. Override: NUM_WORKERS=0 bash run.sh
+NUM_WORKERS=${NUM_WORKERS:-2}
+
 CKPT_DIR=${HOME}/checkpoints            # BASE_CKPT_DIR (HOME/checkpoints)
 RESULTS_DIR=${BASE}/eval_results/20260615
 mkdir -p "${HOME}/checkpoints" "${HOME}/tensorboard" "${RESULTS_DIR}"
@@ -69,6 +74,7 @@ train_one() {
     --opts "exp_name=${exp_name}" \
     --opts "model.ttt_length=${ttt}" \
     --opts "data.max_length=4096" \
+    --opts "data.num_workers=${NUM_WORKERS}" \
     --opts "data.target_cache_path=${CACHE_4096}" \
     --opts "train.max_train_steps=2000" \
     --opts "logging.checkpointing_steps=500"

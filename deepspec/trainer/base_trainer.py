@@ -272,6 +272,42 @@ class BaseTrainer:
             freeze=True,
         )
         del target_model
+
+        # Optional: warm-start the trainable draft weights (backbone + heads)
+        # from a pretrained DSpark checkpoint, then keep training as a fresh run
+        # (step 0, fresh optimizer). This differs from resume: resume needs the
+        # per-rank training-state files; this only loads model weights via
+        # from_pretrained and is meant for finetuning a public checkpoint on new
+        # data. The frozen embed_tokens / lm_head above (from the target) are
+        # re-applied after loading so they stay tied to this target model.
+        pretrained_draft_path = getattr(
+            model_args, "pretrained_draft_path", None
+        )
+        if pretrained_draft_path:
+            print_on_local_main(
+                f"Warm-starting draft weights from pretrained checkpoint: "
+                f"{pretrained_draft_path}"
+            )
+            pretrained = type(draft_model).from_pretrained(
+                pretrained_draft_path,
+                dtype=self.precision_dtype,
+                attn_implementation=str(draft_model.config._attn_implementation),
+            )
+            missing, unexpected = draft_model.load_state_dict(
+                pretrained.state_dict(), strict=False
+            )
+            del pretrained
+            print_on_local_main(
+                f"Loaded pretrained draft weights "
+                f"(missing={len(missing)}, unexpected={len(unexpected)})."
+            )
+            # Re-tie the frozen embeddings / lm_head to THIS target, in case the
+            # pretrained checkpoint carried its own (possibly mismatched) copies.
+            draft_model.initialize_embeddings_and_head(
+                embed_tokens=target_embed_tokens,
+                lm_head=target_lm_head,
+                freeze=True,
+            )
         return draft_model, tokenizer
 
     def _build_draft_model(self, *, target_config, model_args):

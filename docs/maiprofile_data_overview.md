@@ -380,6 +380,69 @@ Interpretation:
 - `layer3_seasonality` is saturated (~7.8) for both — a template-like layer any
   competent drafter handles, so training buys nothing there.
 
+## Warm-Start Finetune (Pretrained + maiprofile) — block7 ★ BEST
+
+Instead of training from scratch, warm-start the draft from the public pretrained
+DSpark block7 checkpoint (`model.pretrained_draft_path`), then finetune on the
+4096-context maiprofile cache. This combines the pretrained model's strong prior
+with maiprofile-specific adaptation.
+
+Run:
+
+```text
+checkpoint: dspark_block7_gemma4_12b_maiprofile_finetune_4096ctx_36k/step_5000
+warm-start from: public pretrained dspark_gemma4_12b_block7
+target model: google/gemma-4-12B-it
+eval samples: 200 per short layer
+cache max_length: 4096
+block_size: 7
+train steps: 5000
+```
+
+Acceptance metrics:
+
+| dataset | #propose | accept_len | verify_rate | accept@0 | accept@1 | accept@2 | accept@3 | accept@4 | accept@5 | accept@6 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 6.98+1 | 5.57 | 0.6983 | 0.8836 | 0.7794 | 0.6922 | 0.6279 | 0.5755 | 0.5333 | 0.4997 |
+| maiprofile_layer1_intent | 6.96+1 | 4.73 | 0.5947 | 0.8319 | 0.6891 | 0.5765 | 0.4912 | 0.4342 | 0.3903 | 0.3500 |
+| maiprofile_layer2_temporal | 6.97+1 | 5.28 | 0.6628 | 0.8812 | 0.7691 | 0.6699 | 0.5903 | 0.5212 | 0.4662 | 0.4099 |
+| maiprofile_layer3_seasonality | 6.99+1 | 7.95 | 0.9952 | 0.9980 | 0.9969 | 0.9961 | 0.9950 | 0.9940 | 0.9931 | 0.9920 |
+| maiprofile_layer4_commercial_preference | 6.98+1 | 5.78 | 0.7243 | 0.8995 | 0.8067 | 0.7353 | 0.6606 | 0.6140 | 0.5649 | 0.5161 |
+
+Confidence-head reliability:
+
+| dataset | samples | proposals | ece_mean | auc_mean | brier_mean | pred_mean | target_mean |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| maiprofile_layer1_actual | 200 | 13,524 | 0.0944 | 0.9272 | 0.1109 | 0.7506 | 0.6562 |
+| maiprofile_layer1_intent | 200 | 12,474 | 0.1329 | 0.8924 | 0.1423 | 0.6712 | 0.5384 |
+| maiprofile_layer2_temporal | 200 | 12,439 | 0.0986 | 0.8643 | 0.1456 | 0.7145 | 0.6159 |
+| maiprofile_layer3_seasonality | 200 | 11,612 | 0.0015 | 0.9798 | 0.0035 | 0.9963 | 0.9950 |
+| maiprofile_layer4_commercial_preference | 200 | 15,501 | 0.0762 | 0.9111 | 0.1155 | 0.7616 | 0.6854 |
+
+Three-way block7 comparison (accept_len, all block7 / 4096 / same eval):
+
+| dataset | pretrained zero-shot | from-scratch maiprofile | **warm-start finetune** |
+|---|---:|---:|---:|
+| maiprofile_layer1_actual | 4.90 | 4.09 | **5.57** |
+| maiprofile_layer1_intent | 3.41 | 3.69 | **4.73** |
+| maiprofile_layer2_temporal | 3.46 | 4.45 | **5.28** |
+| maiprofile_layer3_seasonality | 7.80 | 7.76 | **7.95** |
+| maiprofile_layer4_commercial_preference | 4.02 | 4.53 | **5.78** |
+| **Equal-weight mean** | **4.72** | **4.90** | **5.86** |
+
+Interpretation:
+
+- **Warm-start finetune wins every layer** and lifts the equal-weight mean to
+  **5.86**, +0.96 over from-scratch (4.90) and +1.14 over zero-shot (4.72).
+- The two data regimes are complementary: the pretrained checkpoint supplies a
+  strong general prior (best on `layer1_actual` where from-scratch underperformed),
+  and maiprofile finetuning adapts it to the domain distribution (largest gains on
+  the free-form layers). Combining both beats either alone.
+- Confidence calibration stays usable (seasonality ECE ~0.0015, other layers
+  0.08–0.13, AUC 0.86–0.98), so the scheduler can rely on the head.
+- **Recommended recipe going forward: warm-start from the public pretrained DSpark,
+  then finetune on the 4096 maiprofile cache.**
+
 ## 1024-Context DSpark Eval Results
 
 Run:

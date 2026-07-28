@@ -10,11 +10,16 @@
 | target 模型 | `gemma-4-26B-A4B-it-text-only`（MoE，激活4B） | ✅ 定 | `26b_e011_mtp.json` |
 | target 路径 | `$AZURE_ML_INPUT_UKWDATA/maiprofile/models/text_only` | ✅ 定 | 用户提供 |
 | **draft 结构** | **DENSE**（`enable_moe_block=False`） | ✅ 定（方案A） | 官方 26B MTP 是 dense |
-| draft backbone 层数 | `num_draft_layers=4`（官方 MTP=4层） | ⚠️ 待探测确认 | `gemma4_mtp.py` |
-| target 层数 / `target_layer_ids` | 自动从 target `num_hidden_layers` 派生 | ⚠️ **待 probe** | 未知具体层数 |
+| target 层数 | **30 层**，hidden **2816**，vocab 262144 | ✅ probe 确认 | `probe_gemma4_target.py` |
+| target MoE | **128 experts, top_k=8**, moe_int 704 | ✅ probe 确认 | probe |
+| model_type | 顶层 `gemma4` / text `gemma4_text` | ✅ probe 确认 | probe |
+| attention | `attention_k_eq_v=True`（K=V 共享，v_proj=None） | ✅ 代码已支持 | modeling.py:43-71 |
+| draft backbone 层数 | `num_draft_layers=4`（官方 MTP=4层） | ✅ 定 | `gemma4_mtp.py` |
+| `target_layer_ids` | **`[3, 11, 19, 28]`**（pin 死） | ✅ 定 | probe 派生 |
 | block_size | 7（沿用 best-result 配方） | ✅ 定 | 12B block7 最优 |
 | 训练数据（regen） | `mtp_26b/split/train_maiprofile_26b.jsonl`（29.3万条） | ✅ 已存在，不重跑 | `gemma4-mtp-trainer/docs/DATA.md` |
 | **DSpark target cache** | 多层 hidden 拼接，**≠ MTP cache** | ❌ **未生成，必须先跑** | `prepare_target_cache.py` |
+| cache 脚本兼容性 | `gemma4` 顶层→走 `language_model` 分支 | ✅ probe 后确认可兼容 | prepare_target_cache.py:57 |
 | smoke（结构+前向） | tiny MoE 版已过 | ✅ 服务器已验证 | `smoke_dspark_gemma4_moe.py` |
 
 ## 关键设计判断：为什么 draft 用 dense
@@ -53,14 +58,11 @@ DSpark 需要的是 **多个 `target_layer_ids` 层的 hidden 拼接**（`prepar
 
 ## 待服务器执行的步骤（顺序）
 
-### 1. 探测 target 结构（只读，无副作用）
-```bash
-python scripts/probe_gemma4_target.py
-```
-确认：`num_hidden_layers`、`enable_moe_block=True`、`num_experts`/`top_k_experts`、
-`hidden_size`、以及自动派生的 `target_layer_ids`。**用输出的层数回填/确认 config。**
+### 1. 探测 target 结构 ✅ 已完成
+30 层 / hidden 2816 / MoE 128e top8 / model_type=gemma4(顶层)+gemma4_text。
+`target_layer_ids=[3,11,19,28]` 已 pin 进 config。
 
-### 2. 生成 DSpark 26B target cache
+### 2. 生成 DSpark 26B target cache ❌ 待跑
 ```bash
 python scripts/data/prepare_target_cache.py \
   --config config/dspark/dspark_gemma4_26b.py \
@@ -68,10 +70,9 @@ python scripts/data/prepare_target_cache.py \
   --output-dir <cache_out_dir> \
   --min-loss-tokens 14
 ```
-⚠️ 潜在坑：`prepare_target_cache.py:57,68` 只识别 `model_type in (gemma4, gemma4_unified)`
-取 `language_model` / `text_config.hidden_size`。若 26B text-only 顶层 `model_type` 是
-`gemma4_text`（直接文本模型），会走 else 分支取 `target_model.model`——**需 probe 确认
-model_type 后验证这条路径**，可能要小补丁。
+model_type=`gemma4`(顶层),`prepare_target_cache.py:57` 走 `language_model` 分支，
+`_get_target_hidden_size` 取 `text_config.hidden_size=2816`——兼容 ✅。
+cache 存 4 层(`[3,11,19,28]`)hidden 拼接(4×2816=11264 宽)+ last_hidden。
 
 ### 3. 训练
 ```bash

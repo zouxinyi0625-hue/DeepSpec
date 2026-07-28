@@ -36,9 +36,9 @@ model = dict(
     target_model_name_or_path=TARGET_MODEL_PATH,
     block_size=7,
     num_draft_layers=4,
-    # Auto-filled by finalize_cfg from the target's num_hidden_layers unless
-    # explicitly overridden here or via env TARGET_LAYER_IDS="5,17,29,41".
-    target_layer_ids=None,
+    # Pinned from probe (2026: 26B has 30 layers, hidden 2816). Uniform spread
+    # ending at N-2. Override via env TARGET_LAYER_IDS or --opts if retuning.
+    target_layer_ids=[3, 11, 19, 28],
     mask_token_id=4,
     num_anchors=512,
     pretrained_draft_path=None,

@@ -62,7 +62,7 @@ def build_tiny_moe_config() -> Gemma4TextConfig:
     cfg.markov_rank = 0
     cfg.block_size = 4
     cfg.tie_word_embeddings = False
-    cfg._attn_implementation = "sdpa"
+    cfg._attn_implementation = "flex_attention"
     cfg.layer_types = ["full_attention"] * cfg.num_hidden_layers
     return cfg
 

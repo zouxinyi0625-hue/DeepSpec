@@ -20,8 +20,11 @@ CONFIG_PATH=${CONFIG_PATH:-config/dspark/dspark_gemma4_26b.py}
 TARGET_MODEL_PATH=${TARGET_MODEL_PATH:-${MOUNT}/maiprofile/models/text_only}
 TRAIN_DATA_PATH=${TRAIN_DATA_PATH:-${MOUNT}/maiprofile/mtp_26b/split/train_maiprofile_26b.jsonl}
 
-# New cache output dir on the new mount.
-OUTPUT_DIR=${OUTPUT_DIR:-${MOUNT}/maiprofile/dspark_26b/target_cache}
+# New cache output dir on the new mount. Bump CACHE_TAG (or pass OUTPUT_DIR) to
+# start in a fresh directory instead of clearing a stale one — deleting on the
+# mount is slow, so a new folder is preferred over rm -rf on a failed run.
+CACHE_TAG=${CACHE_TAG:-v2}
+OUTPUT_DIR=${OUTPUT_DIR:-${MOUNT}/maiprofile/dspark_26b/target_cache_${CACHE_TAG}}
 
 MIN_LOSS_TOKENS=${MIN_LOSS_TOKENS:-14}
 LOCAL_BATCH_SIZE=${LOCAL_BATCH_SIZE:-8}
@@ -44,12 +47,20 @@ export TOKENIZERS_PARALLELISM=false
 # Create the cache dir (and parents) on the new mount.
 mkdir -p "${OUTPUT_DIR}"
 
-# prepare_target_cache.py refuses a non-empty output dir. A previous failed run
-# (e.g. the NCCL barrier timeout) leaves half-written shards behind, so clear
-# stale contents before retrying. Set KEEP_EXISTING=1 to skip this.
-if [[ "${KEEP_EXISTING:-0}" != "1" ]] && [[ -n "$(ls -A "${OUTPUT_DIR}" 2>/dev/null)" ]]; then
-    echo "Output dir not empty; clearing stale contents from a prior run: ${OUTPUT_DIR}"
-    rm -rf "${OUTPUT_DIR:?}"/*
+# prepare_target_cache.py refuses a non-empty output dir. We avoid slow on-mount
+# deletes by using a fresh CACHE_TAG dir per run. If you DO reuse a dir that has
+# stale shards, set CLEAR_STALE=1 to rm them (slow on mounts); default is to
+# fail loudly so you pick a new CACHE_TAG instead.
+if [[ -n "$(ls -A "${OUTPUT_DIR}" 2>/dev/null)" ]]; then
+    if [[ "${CLEAR_STALE:-0}" == "1" ]]; then
+        echo "CLEAR_STALE=1: removing stale contents (slow on mount): ${OUTPUT_DIR}"
+        rm -rf "${OUTPUT_DIR:?}"/*
+    else
+        echo "ERROR: output dir not empty: ${OUTPUT_DIR}" >&2
+        echo "  Use a fresh dir:  CACHE_TAG=v3 bash $0" >&2
+        echo "  Or clear it:      CLEAR_STALE=1 bash $0  (slow on mount)" >&2
+        exit 1
+    fi
 fi
 
 echo "Generating DSpark 26B target cache"

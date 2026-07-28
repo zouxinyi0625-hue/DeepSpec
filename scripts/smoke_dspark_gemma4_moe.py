@@ -9,7 +9,17 @@ Run on the server (where transformers is importable):
     python scripts/smoke_dspark_gemma4_moe.py
 """
 
+import os
+import sys
+
 import torch
+
+# Make the repo root importable regardless of the current working directory
+# (the server launches this from an arbitrary exe/wd path).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
 
 from deepspec.modeling.dspark.gemma4.modeling import Gemma4DSparkModel

@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Train Gemma4 MoE DSpark on MAI Profile, writing checkpoints locally for speed
-# then periodically syncing to the MSN.DnI mount (same pattern as the dense
-# short-layer trainer). MoE target model lives on the ukwdata mount.
+# Train Gemma4-26B-A4B DSpark (DENSE draft over MoE target) on MAI Profile,
+# writing checkpoints locally for speed then periodically syncing to the MSN.DnI
+# mount (same pattern as the dense 12B short-layer trainer). 26B MoE target model
+# lives on the ukwdata mount.
+#
+# PREREQ: the DSpark 26B target cache must already exist (multi-layer hidden
+# states, NOT the MTP last_hidden+KV cache). Generate it with
+# scripts/data/prepare_target_cache.py using this same config + the 26B regen
+# split ($AZURE_ML_INPUT_UKWDATA/maiprofile/mtp_26b/split/train_maiprofile_26b.jsonl).
 
-EXP_NAME=${EXP_NAME:-dspark_block7_gemma4_moe_maiprofile_4096ctx}
-CONFIG_PATH=${CONFIG_PATH:-config/dspark/dspark_gemma4_moe.py}
+EXP_NAME=${EXP_NAME:-dspark_block7_gemma4_26b_dense_maiprofile_4096ctx}
+CONFIG_PATH=${CONFIG_PATH:-config/dspark/dspark_gemma4_26b.py}
 MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS:-5000}
 CHECKPOINTING_STEPS=${CHECKPOINTING_STEPS:-500}
 SYNC_INTERVAL_SECS=${SYNC_INTERVAL_SECS:-300}

@@ -6,38 +6,45 @@ from deepspec.trainer import Gemma4DSparkTrainer
 BASE_TB_DIR = os.path.expanduser("~/tensorboard")
 BASE_CKPT_DIR = os.path.expanduser("~/checkpoints")
 project_name = "deepspec"
-exp_name = "dspark_block7_gemma4_moe_maiprofile"
+exp_name = "dspark_block7_gemma4_26b_dense_maiprofile"
 seed = 42
 
-# Gemma4 MoE DSpark training config (Tima-style MoE text target).
+# Gemma4-26B-A4B MoE-target DSpark config — DENSE draft (design decision "A").
 #
-# Target model path is resolved from $AZURE_ML_INPUT_UKWDATA at launch:
+# The 26B target (google/gemma-4-26B-A4B-it-text-only) IS a MoE model, but the
+# draft is kept DENSE to mirror Google's own 26B MTP assistant (a dense, Q-only
+# draft over a MoE target). model.enable_moe_block=False forces the draft dense
+# even though the target text_config has enable_moe_block=True; build_draft_config
+# honors this override.
+#
+# Target model path resolves from $AZURE_ML_INPUT_UKWDATA at launch:
 #   $AZURE_ML_INPUT_UKWDATA/maiprofile/models/text_only
-# Override with env TARGET_MODEL_PATH if the mount layout changes.
+# Override with env TARGET_MODEL_PATH.
 #
-# MoE-specific params (num_experts / top_k_experts / moe_intermediate_size) are
-# NOT set here: build_draft_config() inherits them from the target text_config
-# automatically. Set model.top_k_experts only if you want to OVERRIDE the
-# target's expert-selection count for the draft.
+# NOTE: target_layer_ids default is auto-derived from the target's
+# num_hidden_layers at finalize (env TARGET_LAYER_IDS overrides). Run
+# scripts/probe_gemma4_target.py first to confirm the real layer count.
 _UKW = os.environ.get("AZURE_ML_INPUT_UKWDATA", "")
 _DEFAULT_TARGET = (
-    os.path.join(_UKW, "maiprofile/models/text_only") if _UKW else "google/gemma-4-12B-it"
+    os.path.join(_UKW, "maiprofile/models/text_only")
+    if _UKW
+    else "google/gemma-4-26B-A4B-it-text-only"
 )
 TARGET_MODEL_PATH = os.environ.get("TARGET_MODEL_PATH", _DEFAULT_TARGET)
 
 model = dict(
     target_model_name_or_path=TARGET_MODEL_PATH,
     block_size=7,
-    num_draft_layers=5,
+    num_draft_layers=4,
     # Auto-filled by finalize_cfg from the target's num_hidden_layers unless
-    # explicitly overridden here or via env TARGET_LAYER_IDS="5,17,29,41,46".
+    # explicitly overridden here or via env TARGET_LAYER_IDS="5,17,29,41".
     target_layer_ids=None,
     mask_token_id=4,
     num_anchors=512,
     pretrained_draft_path=None,
 
-    # Uncomment to override the draft's top-k experts (else inherits target's):
-    # top_k_experts=2,
+    # DENSE draft over a MoE target (design "A"). Set True to build a MoE draft.
+    enable_moe_block=False,
 
     # markov head
     markov_rank=256,

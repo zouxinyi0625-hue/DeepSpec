@@ -55,6 +55,12 @@ def _validate_required_text_fields(text_config) -> None:
 def build_draft_config(target_config, model_args):
     draft_config = get_gemma4_text_config(target_config)
     _validate_required_text_fields(draft_config)
+    # The draft's MoE flag defaults to the target's, but can be explicitly
+    # overridden. Setting model.enable_moe_block=False builds a DENSE draft even
+    # when the target is MoE (e.g. Gemma4-26B-A4B) — this mirrors Google's own
+    # 26B MTP assistant, which is a dense Q-only draft over a MoE target.
+    if "enable_moe_block" in model_args:
+        draft_config.enable_moe_block = bool(model_args.enable_moe_block)
     if bool(draft_config.enable_moe_block):
         for field in ("num_experts", "moe_intermediate_size", "top_k_experts"):
             assert hasattr(draft_config, field), (

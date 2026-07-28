@@ -7,8 +7,11 @@ TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
 
 
 def get_gemma4_text_config(target_config):
+    if target_config.model_type in ("gemma4_text", "gemma4_unified_text"):
+        return copy.deepcopy(target_config)
     assert target_config.model_type in ("gemma4", "gemma4_unified"), (
-        "Gemma4 DSpark expects a Gemma4 or Gemma4 Unified top-level target config, "
+        "Gemma4 DSpark expects a Gemma4 or Gemma4 Unified top-level target config "
+        "(or a gemma4_text / gemma4_unified_text text config directly), "
         f"got model_type={target_config.model_type!r}."
     )
     text_config = target_config.text_config
@@ -52,6 +55,12 @@ def _validate_required_text_fields(text_config) -> None:
 def build_draft_config(target_config, model_args):
     draft_config = get_gemma4_text_config(target_config)
     _validate_required_text_fields(draft_config)
+    if bool(draft_config.enable_moe_block):
+        for field in ("num_experts", "moe_intermediate_size", "top_k_experts"):
+            assert hasattr(draft_config, field), (
+                f"target_config.text_config.{field} must be provided when "
+                "enable_moe_block is true."
+            )
 
     num_target_layers = int(draft_config.num_hidden_layers)
     num_draft_layers = int(model_args.num_draft_layers)
@@ -99,6 +108,8 @@ def build_draft_config(target_config, model_args):
     draft_config.markov_rank = markov_rank
     if markov_rank > 0:
         draft_config.markov_head_type = str(model_args.markov_head_type)
+    if bool(draft_config.enable_moe_block) and "top_k_experts" in model_args:
+        draft_config.top_k_experts = int(model_args.top_k_experts)
     return draft_config
 
 

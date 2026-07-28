@@ -44,6 +44,14 @@ export TOKENIZERS_PARALLELISM=false
 # Create the cache dir (and parents) on the new mount.
 mkdir -p "${OUTPUT_DIR}"
 
+# prepare_target_cache.py refuses a non-empty output dir. A previous failed run
+# (e.g. the NCCL barrier timeout) leaves half-written shards behind, so clear
+# stale contents before retrying. Set KEEP_EXISTING=1 to skip this.
+if [[ "${KEEP_EXISTING:-0}" != "1" ]] && [[ -n "$(ls -A "${OUTPUT_DIR}" 2>/dev/null)" ]]; then
+    echo "Output dir not empty; clearing stale contents from a prior run: ${OUTPUT_DIR}"
+    rm -rf "${OUTPUT_DIR:?}"/*
+fi
+
 echo "Generating DSpark 26B target cache"
 echo "  mount:        ${MOUNT}"
 echo "  config:       ${CONFIG_PATH}"

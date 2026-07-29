@@ -1,3 +1,4 @@
+import time
 from contextlib import nullcontext
 import math
 import os
@@ -485,8 +486,17 @@ class BaseTrainer:
         prefetcher = CUDAPrefetcher(dataloader, self.device)
         training_logger.start_session(global_step=self.global_step)
 
+        _profile = os.environ.get("DSPARK_PROFILE_STEPS") == "1"
+        _prof = {"data": 0.0, "fwd": 0.0, "bwd": 0.0, "opt": 0.0, "n": 0}
+        _t_prev = time.perf_counter() if _profile else 0.0
+
         with self.suspend_controller.monitoring():
             for batch in prefetcher:
+                if _profile:
+                    torch.cuda.synchronize(self.device)
+                    _now = time.perf_counter()
+                    _prof["data"] += _now - _t_prev  # time waiting for the batch
+                    _t_fwd0 = _now
                 if self.next_micro_step < 3 or (
                     self.next_micro_step % 16 == 0
                     and self.global_step == 0
@@ -502,10 +512,20 @@ class BaseTrainer:
                 sync_context = nullcontext() if should_sync else self.model.no_sync()
                 with sync_context:
                     loss = self.run_batch(batch) / self.gradient_accumulation_steps
+                    if _profile:
+                        torch.cuda.synchronize(self.device)
+                        _t_bwd0 = time.perf_counter()
+                        _prof["fwd"] += _t_bwd0 - _t_fwd0
                     loss.backward()
+                    if _profile:
+                        torch.cuda.synchronize(self.device)
+                        _t_bwd1 = time.perf_counter()
+                        _prof["bwd"] += _t_bwd1 - _t_bwd0
                 self.next_micro_step += 1
 
                 if not should_sync:
+                    if _profile:
+                        _t_prev = time.perf_counter()
                     continue
 
                 grad_norm = FSDP.clip_grad_norm_(
@@ -513,6 +533,19 @@ class BaseTrainer:
                     float(self.args.train.max_grad_norm),
                 )
                 self.optimizer.step()
+                if _profile:
+                    torch.cuda.synchronize(self.device)
+                    _t_opt1 = time.perf_counter()
+                    _prof["opt"] += _t_opt1 - _t_bwd1
+                    _prof["n"] += 1
+                    print_on_local_main(
+                        f"[profile] step={self.global_step} per-optstep: "
+                        f"data={_prof['data']:.1f}s fwd={_prof['fwd']:.1f}s "
+                        f"bwd={_prof['bwd']:.1f}s opt={_prof['opt']:.1f}s "
+                        f"(over {_prof['n']} optsteps, {self.gradient_accumulation_steps} micro each)",
+                        flush=True,
+                    )
+                    _prof = {"data": 0.0, "fwd": 0.0, "bwd": 0.0, "opt": 0.0, "n": 0}
                 training_logger.on_optimizer_step(
                     global_step=self.global_step,
                     next_micro_step=self.next_micro_step,

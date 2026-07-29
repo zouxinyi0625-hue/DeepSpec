@@ -84,10 +84,12 @@ data = dict(
     target_cache_path=None,
     chat_template="gemma4",
     max_length=4096,
-    # Reads now use os.pread (not mmap), so the old multi-worker mmap futex
-    # deadlock on the mount is gone. Use workers to overlap the ~250ms/sample
-    # mount read with compute. Each worker opens its own fds (see __getstate__).
-    num_workers=4,
+    # num_workers=0 (single-process loading). Even with os.pread (not mmap),
+    # multi-worker DataLoaders on the Azure mount deadlock: one rank's worker
+    # stalls on mount I/O, that rank never reaches the first collective, and the
+    # other 7 ranks spin-wait (100% util / ~120W) forever. Confirmed twice.
+    # Keep 0 for mount caches; only raise if the cache is on fast local disk.
+    num_workers=0,
 )
 
 

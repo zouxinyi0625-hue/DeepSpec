@@ -12,9 +12,9 @@ EXP_NAME=${EXP_NAME:-dspark_block7_gemma4_26b_dense_maiprofile_4096ctx}
 CONFIG_PATH=${CONFIG_PATH:-config/dspark/dspark_gemma4_26b.py}
 MAX_TRAIN_STEPS=${MAX_TRAIN_STEPS:-5000}
 CHECKPOINTING_STEPS=${CHECKPOINTING_STEPS:-500}
-# Reads use os.pread now (not mmap), so multi-worker on the mount is safe again.
-# Workers overlap the ~250ms/sample mount read with compute.
-NUM_WORKERS=${NUM_WORKERS:-4}
+# num_workers=0: multi-worker DataLoaders deadlock on the mount even with pread
+# (one rank's worker stalls -> that rank misses the collective -> others spin).
+NUM_WORKERS=${NUM_WORKERS:-0}
 
 # Data mount (target model + target cache live here). Handle spelling variants.
 MOUNT="${MOUNT:-${AZURE_ML_INPUT_UKWDATA:-${AZURE_ML_INPUT_UKDATA:-${AZURE_ML_INPUT_ukwdata:-}}}}"

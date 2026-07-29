@@ -5,6 +5,16 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn.attention.flex_attention import flex_attention
 
+# Compile flex_attention once at import. The eager (uncompiled) path materializes
+# the full [seq, seq] score matrix and is 10-50x slower — the source of the
+# 'flex_attention called without torch.compile()' warning and the slow steps on
+# the 26B target (head_dim=512, seq=4096). Compiling generates a fused kernel.
+# Fall back to eager if compilation is unavailable in the runtime.
+try:
+    _flex_attention_compiled = torch.compile(flex_attention, dynamic=False)
+except Exception:  # pragma: no cover
+    _flex_attention_compiled = flex_attention
+
 from transformers.cache_utils import Cache
 from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
@@ -146,7 +156,7 @@ class Gemma4DSparkAttention(nn.Module):
             attention_mask is not None
             and self.config._attn_implementation == "flex_attention"
         ):
-            attn_output = flex_attention(
+            attn_output = _flex_attention_compiled(
                 q,
                 k,
                 v,

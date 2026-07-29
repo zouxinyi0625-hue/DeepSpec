@@ -3,7 +3,12 @@ import copy
 from deepspec.modeling.dspark.common import validate_target_layer_ids
 
 
-TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
+# gemma4 draft uses SDPA (not flex_attention). The DSpark block mask is passed
+# as a dense [B,1,Q,KV] bool tensor. flex_attention can't be Triton-compiled on
+# A100 for gemma4 (global_head_dim=512 -> kernel shared-mem 200704 > 166912
+# limit), and uncompiled flex is 10-50x slower. SDPA's FlashAttention/mem-
+# efficient kernel handles head_dim=512 natively with no compile step.
+TRAIN_ATTN_IMPLEMENTATION = "sdpa"
 
 
 def get_gemma4_text_config(target_config):

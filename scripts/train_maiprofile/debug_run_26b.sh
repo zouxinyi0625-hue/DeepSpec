@@ -13,8 +13,10 @@ set -euo pipefail
 # faulthandler: dump ALL thread stacks of every rank after N seconds of no
 # progress, and on SIGQUIT/SIGABRT. This pinpoints the hung line.
 export PYTHONFAULTHANDLER=1
-# Blocking CUDA so any CUDA error surfaces at the real call site (not later).
-export CUDA_LAUNCH_BLOCKING=1
+# NOTE: we deliberately do NOT set CUDA_LAUNCH_BLOCKING=1 here. With the
+# uncompiled flex_attention path (26B head_dim=512, 4096 seq materializes the
+# full score matrix) blocking launches slow each step ~10-50x and LOOK like a
+# hang. Enable it only for a genuine illegal-memory-access hunt.
 # NCCL: verbose + async error handling so a stuck collective is reported.
 export NCCL_DEBUG=WARN
 export TORCH_NCCL_BLOCKING_WAIT=1
@@ -22,6 +24,15 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 # Shorten the collective watchdog so a hang aborts (with a stack) in ~3 min
 # instead of the default 30-180 min.
 export TORCH_NCCL_TIMEOUT_SEC=${TORCH_NCCL_TIMEOUT_SEC:-180}
+
+# Optional fast end-to-end check: tiny global batch so grad_accum=1 and every
+# micro-step is a full optimizer step (all_reduce + loss print) — surfaces
+# whether the pipeline completes a step in seconds instead of waiting for 64
+# micro-steps. Set FAST_CHECK=1 to enable.
+if [[ "${FAST_CHECK:-0}" == "1" ]]; then
+    export GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-8}
+    echo "FAST_CHECK: global_batch_size=${GLOBAL_BATCH_SIZE} (grad_accum=1, loss every step)"
+fi
 
 # Force single-process dataloading (mount multi-worker deadlocks).
 export NUM_WORKERS=0

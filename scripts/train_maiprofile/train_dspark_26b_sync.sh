@@ -70,6 +70,8 @@ python train.py \
   --opts "data.target_cache_path=${TARGET_CACHE_DIR}" \
   --opts "data.num_workers=${NUM_WORKERS}" \
   --opts "train.max_train_steps=${MAX_TRAIN_STEPS}" \
+  ${GLOBAL_BATCH_SIZE:+--opts "train.global_batch_size=${GLOBAL_BATCH_SIZE}"} \
+  ${LOGGING_STEPS:+--opts "logging.logging_steps=${LOGGING_STEPS}"} \
   --opts "logging.checkpointing_steps=${CHECKPOINTING_STEPS}"
 
 echo "Done. Checkpoints in: ${LOCAL_CKPT_DIR}"

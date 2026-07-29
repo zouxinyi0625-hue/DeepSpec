@@ -348,11 +348,30 @@ class Gemma4DSparkModel(Gemma4PreTrainedModel):
         lm_head: nn.Module,
         freeze: bool = True,
     ):
-        assert self.embed_tokens.weight.shape == embed_tokens.weight.shape
-        assert self.lm_head.weight.shape == lm_head.weight.shape
+        self.initialize_embeddings_and_head_from_weights(
+            embed_weight=embed_tokens.weight,
+            lm_head_weight=lm_head.weight,
+            freeze=freeze,
+        )
+
+    def initialize_embeddings_and_head_from_weights(
+        self,
+        *,
+        embed_weight: torch.Tensor,
+        lm_head_weight: torch.Tensor,
+        freeze: bool = True,
+    ):
+        assert self.embed_tokens.weight.shape == embed_weight.shape, (
+            f"embed weight shape {tuple(embed_weight.shape)} != draft "
+            f"{tuple(self.embed_tokens.weight.shape)}"
+        )
+        assert self.lm_head.weight.shape == lm_head_weight.shape, (
+            f"lm_head weight shape {tuple(lm_head_weight.shape)} != draft "
+            f"{tuple(self.lm_head.weight.shape)}"
+        )
         with torch.no_grad():
-            self.embed_tokens.weight.copy_(embed_tokens.weight.detach())
-            self.lm_head.weight.copy_(lm_head.weight.detach())
+            self.embed_tokens.weight.copy_(embed_weight.detach())
+            self.lm_head.weight.copy_(lm_head_weight.detach())
         if freeze:
             self.set_embedding_head_trainable(False)
 

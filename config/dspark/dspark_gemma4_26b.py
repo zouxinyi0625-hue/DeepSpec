@@ -84,7 +84,10 @@ data = dict(
     target_cache_path=None,
     chat_template="gemma4",
     max_length=4096,
-    num_workers=4,
+    # 0 = single-process loading. Multi-worker DataLoader deadlocks (futex_wait)
+    # when the target cache is mmap-read from the Azure mount; keep 0 for mount
+    # caches. Override to >0 only if the cache is on fast local disk.
+    num_workers=0,
 )
 
 

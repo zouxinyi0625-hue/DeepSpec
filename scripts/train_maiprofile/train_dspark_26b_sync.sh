@@ -71,6 +71,7 @@ python train.py \
   --opts "data.num_workers=${NUM_WORKERS}" \
   --opts "train.max_train_steps=${MAX_TRAIN_STEPS}" \
   ${GLOBAL_BATCH_SIZE:+--opts "train.global_batch_size=${GLOBAL_BATCH_SIZE}"} \
+  ${LOCAL_BATCH_SIZE:+--opts "train.local_batch_size=${LOCAL_BATCH_SIZE}"} \
   ${LOGGING_STEPS:+--opts "logging.logging_steps=${LOGGING_STEPS}"} \
   --opts "logging.checkpointing_steps=${CHECKPOINTING_STEPS}"
 

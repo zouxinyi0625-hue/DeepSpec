@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import flex_attention
 
 from transformers.cache_utils import Cache
@@ -11,8 +12,10 @@ from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
 from transformers.models.gemma4.modeling_gemma4 import (
     Gemma4PreTrainedModel,
     Gemma4RMSNorm,
+    Gemma4TextExperts,
     Gemma4TextMLP,
     Gemma4TextRotaryEmbedding,
+    Gemma4TextRouter,
     Gemma4TextScaledWordEmbedding,
     apply_rotary_pos_emb as apply_gemma4_rotary_pos_emb,
 )
@@ -22,6 +25,7 @@ from deepspec.modeling.dspark.common import (
     DSparkForwardOutput,
     build_eval_mask,
     create_dspark_attention_mask,
+    create_dspark_attention_mask_dense,
     create_noise_embed,
     create_position_ids,
     log_sampler_stats,
@@ -154,15 +158,25 @@ class Gemma4DSparkAttention(nn.Module):
         else:
             attn_is_causal = bool(kwargs.get("is_causal", False))
             self.is_causal = attn_is_causal
-            attn_output = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=attention_mask,
-                dropout_p=0.0 if not self.training else self.attention_dropout,
-                is_causal=attn_is_causal,
-                scale=self.scaling,
-            )
+            # Force the memory-efficient SDPA backend and forbid the MATH
+            # fallback. With head_dim=512 (26B target), PyTorch otherwise selects
+            # the MATH kernel, which materializes the full [heads, Q, KV] score
+            # matrix -> ~63GB/GPU and 40+s/step. The mem-efficient kernel tiles
+            # instead (supports arbitrary attn_mask and head_dim>128), cutting
+            # both memory and time. FLASH is also allowed but it rejects a dense
+            # bool mask, so it's a no-op here; EFFICIENT is the one that fires.
+            with sdpa_kernel(
+                [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION]
+            ):
+                attn_output = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attention_mask,
+                    dropout_p=0.0 if not self.training else self.attention_dropout,
+                    is_causal=attn_is_causal,
+                    scale=self.scaling,
+                )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, -1)
         return self.o_proj(attn_output), None
@@ -172,9 +186,7 @@ class Gemma4DSparkDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        assert not bool(config.enable_moe_block), (
-            "Gemma4 DSpark prototype does not support Gemma4 MoE blocks yet."
-        )
+        self.enable_moe_block = bool(config.enable_moe_block)
         assert int(config.hidden_size_per_layer_input) == 0, (
             "Gemma4 DSpark prototype does not support per-layer input gates yet."
         )
@@ -196,6 +208,21 @@ class Gemma4DSparkDecoderLayer(GradientCheckpointingLayer):
             config.hidden_size,
             eps=config.rms_norm_eps,
         )
+        if self.enable_moe_block:
+            self.router = Gemma4TextRouter(config)
+            self.experts = Gemma4TextExperts(config)
+            self.post_feedforward_layernorm_1 = Gemma4RMSNorm(
+                config.hidden_size,
+                eps=config.rms_norm_eps,
+            )
+            self.post_feedforward_layernorm_2 = Gemma4RMSNorm(
+                config.hidden_size,
+                eps=config.rms_norm_eps,
+            )
+            self.pre_feedforward_layernorm_2 = Gemma4RMSNorm(
+                config.hidden_size,
+                eps=config.rms_norm_eps,
+            )
         self.register_buffer("layer_scalar", torch.ones(1))
 
     def forward(
@@ -233,6 +260,15 @@ class Gemma4DSparkDecoderLayer(GradientCheckpointingLayer):
         residual = hidden_states
         hidden_states = self.pre_feedforward_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
+        if self.enable_moe_block:
+            hidden_states_1 = self.post_feedforward_layernorm_1(hidden_states)
+            hidden_states_flat = residual.reshape(-1, residual.shape[-1])
+            _, top_k_weights, top_k_index = self.router(hidden_states_flat)
+            hidden_states_2 = self.pre_feedforward_layernorm_2(hidden_states_flat)
+            hidden_states_2 = self.experts(hidden_states_2, top_k_index, top_k_weights)
+            hidden_states_2 = hidden_states_2.reshape(residual.shape)
+            hidden_states_2 = self.post_feedforward_layernorm_2(hidden_states_2)
+            hidden_states = hidden_states_1 + hidden_states_2
         hidden_states = self.post_feedforward_layernorm(hidden_states)
         hidden_states = residual + hidden_states
         return hidden_states * self.layer_scalar
@@ -324,11 +360,30 @@ class Gemma4DSparkModel(Gemma4PreTrainedModel):
         lm_head: nn.Module,
         freeze: bool = True,
     ):
-        assert self.embed_tokens.weight.shape == embed_tokens.weight.shape
-        assert self.lm_head.weight.shape == lm_head.weight.shape
+        self.initialize_embeddings_and_head_from_weights(
+            embed_weight=embed_tokens.weight,
+            lm_head_weight=lm_head.weight,
+            freeze=freeze,
+        )
+
+    def initialize_embeddings_and_head_from_weights(
+        self,
+        *,
+        embed_weight: torch.Tensor,
+        lm_head_weight: torch.Tensor,
+        freeze: bool = True,
+    ):
+        assert self.embed_tokens.weight.shape == embed_weight.shape, (
+            f"embed weight shape {tuple(embed_weight.shape)} != draft "
+            f"{tuple(self.embed_tokens.weight.shape)}"
+        )
+        assert self.lm_head.weight.shape == lm_head_weight.shape, (
+            f"lm_head weight shape {tuple(lm_head_weight.shape)} != draft "
+            f"{tuple(self.lm_head.weight.shape)}"
+        )
         with torch.no_grad():
-            self.embed_tokens.weight.copy_(embed_tokens.weight.detach())
-            self.lm_head.weight.copy_(lm_head.weight.detach())
+            self.embed_tokens.weight.copy_(embed_weight.detach())
+            self.lm_head.weight.copy_(lm_head_weight.detach())
         if freeze:
             self.set_embedding_head_trainable(False)
 
@@ -477,13 +532,23 @@ class Gemma4DSparkModel(Gemma4PreTrainedModel):
         )
         draft_position_ids = create_position_ids(anchor_positions, self.block_size)
         full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1)
-        dspark_attn_mask = create_dspark_attention_mask(
-            anchor_positions=anchor_positions,
-            block_keep_mask=block_keep_mask,
-            seq_len=seq_len,
-            block_size=self.block_size,
-            device=device,
-        )
+        if self.config._attn_implementation == "flex_attention":
+            dspark_attn_mask = create_dspark_attention_mask(
+                anchor_positions=anchor_positions,
+                block_keep_mask=block_keep_mask,
+                seq_len=seq_len,
+                block_size=self.block_size,
+                device=device,
+            )
+        else:
+            # SDPA path: dense [B,1,Q,KV] bool mask (True = attend).
+            dspark_attn_mask = create_dspark_attention_mask_dense(
+                anchor_positions=anchor_positions,
+                block_keep_mask=block_keep_mask,
+                seq_len=seq_len,
+                block_size=self.block_size,
+                device=device,
+            )
         output_hidden = self._forward_backbone(
             position_ids=full_position_ids,
             noise_embedding=noise_embedding,

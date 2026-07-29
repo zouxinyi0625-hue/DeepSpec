@@ -106,6 +106,55 @@ def create_dspark_attention_mask(
     )
 
 
+def create_dspark_attention_mask_dense(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    block_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Dense boolean version of the DSpark attention mask for SDPA.
+
+    Returns a [B, 1, Q_LEN, KV_LEN] bool tensor where True = attend. Same logic
+    as the flex_attention mask_mod, vectorized. Used instead of flex_attention
+    on hardware where Triton can't compile the flex kernel (e.g. gemma4's
+    global_head_dim=512 exceeds A100 shared-memory limits).
+    """
+    bsz, num_blocks = anchor_positions.shape
+    q_len = num_blocks * block_size
+    kv_len = seq_len + num_blocks * block_size
+
+    q_idx = torch.arange(q_len, device=device)
+    kv_idx = torch.arange(kv_len, device=device)
+
+    q_block_id = q_idx // block_size  # [Q]
+    # anchor_pos per query position: gather by q_block_id -> [B, Q]
+    anchor_pos = anchor_positions.gather(
+        1, q_block_id.unsqueeze(0).expand(bsz, -1)
+    )  # [B, Q]
+
+    is_context = kv_idx < seq_len  # [KV]
+    is_draft = kv_idx >= seq_len  # [KV]
+    kv_block_id = (kv_idx - seq_len) // block_size  # [KV] (garbage where is_context)
+
+    # mask_context[B,Q,KV] = is_context & (kv_idx < anchor_pos[B,Q])
+    mask_context = is_context.view(1, 1, kv_len) & (
+        kv_idx.view(1, 1, kv_len) < anchor_pos.unsqueeze(-1)
+    )
+    # mask_draft[B,Q,KV] = is_draft & (q_block_id == kv_block_id)
+    same_block = q_block_id.view(1, q_len, 1) == kv_block_id.view(1, 1, kv_len)
+    mask_draft = is_draft.view(1, 1, kv_len) & same_block
+
+    # is_valid_block per query: gather block_keep_mask by q_block_id -> [B, Q]
+    is_valid_block = block_keep_mask.gather(
+        1, q_block_id.unsqueeze(0).expand(bsz, -1)
+    )  # [B, Q] bool
+
+    allowed = (mask_context | mask_draft) & is_valid_block.unsqueeze(-1)
+    return allowed.unsqueeze(1)  # [B, 1, Q, KV]
+
+
 def build_anchor_candidate_mask(
     *,
     seq_len: int,

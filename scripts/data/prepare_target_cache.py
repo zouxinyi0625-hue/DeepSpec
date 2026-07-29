@@ -212,7 +212,10 @@ def main(local_rank: int):
     target_layer_ids = [int(layer_id) for layer_id in config.model.target_layer_ids]
     min_loss_tokens = int(cli_args.min_loss_tokens)
     seed_all(int(config.seed))
-    device, global_rank, world_size = init_dist(local_rank)
+    # Cache generation is a long single-pass job; give collectives a generous
+    # timeout so the finalize barrier tolerates residual per-rank imbalance
+    # (a single very long sample) even after the shuffle-based balancing below.
+    device, global_rank, world_size = init_dist(local_rank, timeout_minutes=180)
     output_dir = os.path.abspath(cli_args.output_dir)
     print_on_local_main(json.dumps(config, indent=4, cls=CustomJSONEncoder), flush=True)
     print_on_local_main(
@@ -240,6 +243,18 @@ def main(local_rank: int):
     with main_process_first():
         dataset = JsonLineDataset(data_paths=train_data_paths)
 
+    # Deterministically shuffle the global sample order BEFORE splitting across
+    # ranks. The 26B split jsonl is grouped by layer, and layers differ hugely in
+    # sequence length (seasonality short, biography/commercial long). A plain
+    # contiguous split hands whole layers to single ranks, so fast ranks finish
+    # ~1h ahead of slow ranks and the finalize barrier NCCL-times-out. Shuffling
+    # with a shared seed evens the per-rank length distribution. All ranks build
+    # the SAME permutation (same seed), then take disjoint contiguous slices.
+    permuted_indices = torch.randperm(
+        len(dataset),
+        generator=torch.Generator().manual_seed(int(config.seed)),
+    ).tolist()
+
     local_start, local_end = compute_local_sample_range(
         num_samples=len(dataset),
         rank=global_rank,
@@ -247,7 +262,7 @@ def main(local_rank: int):
     )
     local_total_samples = local_end - local_start
 
-    local_subset = Subset(dataset, range(local_start, local_end))
+    local_subset = Subset(dataset, permuted_indices[local_start:local_end])
     tokenizer = AutoTokenizer.from_pretrained(
         config.model.target_model_name_or_path,
     )

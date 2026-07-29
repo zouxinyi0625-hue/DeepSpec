@@ -1,3 +1,4 @@
+import time
 from contextlib import nullcontext
 import math
 import os
@@ -28,6 +29,83 @@ from deepspec.trainer.ckpt_manager import (
     save_checkpoint,
 )
 import deepspec.utils.training_logger as training_logger
+
+
+def _load_target_embed_and_lm_head(model_path: str, *, dtype: torch.dtype):
+    """Read ONLY embed_tokens.weight and lm_head.weight from a target checkpoint.
+
+    Avoids instantiating the (potentially huge MoE) target model on the GPU.
+    Reads tensors directly from safetensors shards on disk. Handles Gemma-style
+    tied embeddings (no separate lm_head weight -> reuse embed_tokens).
+    """
+    import glob
+    import json
+
+    from safetensors import safe_open
+
+    model_path = os.path.expanduser(str(model_path))
+
+    # Candidate key names for the two tensors, most-specific first. Gemma4's
+    # text stack lives under model.language_model.* or model.* depending on the
+    # checkpoint; also accept bare names.
+    embed_keys = [
+        "model.language_model.embed_tokens.weight",
+        "language_model.model.embed_tokens.weight",
+        "model.embed_tokens.weight",
+        "embed_tokens.weight",
+    ]
+    lm_head_keys = [
+        "lm_head.weight",
+        "language_model.lm_head.weight",
+        "model.lm_head.weight",
+    ]
+
+    # Build a key -> shard-file map from the safetensors index (sharded) or a
+    # single .safetensors file.
+    index_files = glob.glob(os.path.join(model_path, "*.safetensors.index.json"))
+    key_to_file = {}
+    if index_files:
+        with open(index_files[0], "r", encoding="utf-8") as handle:
+            weight_map = json.load(handle)["weight_map"]
+        for key, fname in weight_map.items():
+            key_to_file[key] = os.path.join(model_path, fname)
+    else:
+        shards = sorted(glob.glob(os.path.join(model_path, "*.safetensors")))
+        assert shards, f"No safetensors found under {model_path}"
+        for shard in shards:
+            with safe_open(shard, framework="pt") as f:
+                for key in f.keys():
+                    key_to_file[key] = shard
+
+    def _resolve(candidates):
+        for key in candidates:
+            if key in key_to_file:
+                return key
+        return None
+
+    def _read(key):
+        with safe_open(key_to_file[key], framework="pt") as f:
+            return f.get_tensor(key).to(dtype)
+
+    embed_key = _resolve(embed_keys)
+    assert embed_key is not None, (
+        f"Could not find embed_tokens weight in {model_path}. "
+        f"Available sample keys: {list(key_to_file)[:8]}"
+    )
+    embed_weight = _read(embed_key)
+
+    lm_head_key = _resolve(lm_head_keys)
+    if lm_head_key is not None:
+        lm_head_weight = _read(lm_head_key)
+    else:
+        # Tied embeddings (Gemma default): lm_head shares embed_tokens.weight.
+        print_on_local_main(
+            "No separate lm_head weight in target; using tied embed_tokens.weight."
+        )
+        lm_head_weight = embed_weight.clone()
+
+    return embed_weight, lm_head_weight
+
 from deepspec.utils.hfai_suspend import SuspendController
 
 
@@ -257,21 +335,23 @@ class BaseTrainer:
         )
         draft_model = draft_model.to(device=self.device, dtype=self.precision_dtype)
 
-        # Training only uses the target checkpoint to initialize frozen draft
-        # embeddings and lm_head weights.
-        target_model = AutoModelForCausalLM.from_pretrained(
+        # Training only uses the target's embed_tokens + lm_head weights to
+        # initialize the (frozen) draft. Loading the whole target via
+        # from_pretrained materializes all layers on the GPU first (even with
+        # device_map="cpu" it can still transiently allocate on CUDA), which for
+        # a 26B MoE target (~52GB) OOMs/deadlocks 8 ranks. Instead read ONLY the
+        # two weight tensors straight off disk (safetensors), never building the
+        # target model and never touching the GPU.
+        embed_weight, lm_head_weight = _load_target_embed_and_lm_head(
             model_args.target_model_name_or_path,
             dtype=self.precision_dtype,
-        ).to(device="cpu").eval()
-        target_embed_tokens = target_model.get_input_embeddings()
-        target_lm_head = target_model.get_output_embeddings()
-        assert (target_lm_head is not None) and (target_embed_tokens is not None)
-        draft_model.initialize_embeddings_and_head(
-            embed_tokens=target_embed_tokens,
-            lm_head=target_lm_head,
+        )
+        draft_model.initialize_embeddings_and_head_from_weights(
+            embed_weight=embed_weight,
+            lm_head_weight=lm_head_weight,
             freeze=True,
         )
-        del target_model
+        del embed_weight, lm_head_weight
 
         # Optional: warm-start the trainable draft weights (backbone + heads)
         # from a pretrained DSpark checkpoint, then keep training as a fresh run
@@ -406,18 +486,46 @@ class BaseTrainer:
         prefetcher = CUDAPrefetcher(dataloader, self.device)
         training_logger.start_session(global_step=self.global_step)
 
+        _profile = os.environ.get("DSPARK_PROFILE_STEPS") == "1"
+        _prof = {"data": 0.0, "fwd": 0.0, "bwd": 0.0, "opt": 0.0, "n": 0}
+        _t_prev = time.perf_counter() if _profile else 0.0
+
         with self.suspend_controller.monitoring():
             for batch in prefetcher:
+                if _profile:
+                    torch.cuda.synchronize(self.device)
+                    _now = time.perf_counter()
+                    _prof["data"] += _now - _t_prev  # time waiting for the batch
+                    _t_fwd0 = _now
+                if self.next_micro_step < 3 or (
+                    self.next_micro_step % 16 == 0
+                    and self.global_step == 0
+                ):
+                    print_on_local_main(
+                        f"[startup] micro_step={self.next_micro_step} "
+                        f"got batch, running forward/backward ...",
+                        flush=True,
+                    )
                 should_sync = (
                     (self.next_micro_step + 1) % self.gradient_accumulation_steps == 0
                 )
                 sync_context = nullcontext() if should_sync else self.model.no_sync()
                 with sync_context:
                     loss = self.run_batch(batch) / self.gradient_accumulation_steps
+                    if _profile:
+                        torch.cuda.synchronize(self.device)
+                        _t_bwd0 = time.perf_counter()
+                        _prof["fwd"] += _t_bwd0 - _t_fwd0
                     loss.backward()
+                    if _profile:
+                        torch.cuda.synchronize(self.device)
+                        _t_bwd1 = time.perf_counter()
+                        _prof["bwd"] += _t_bwd1 - _t_bwd0
                 self.next_micro_step += 1
 
                 if not should_sync:
+                    if _profile:
+                        _t_prev = time.perf_counter()
                     continue
 
                 grad_norm = FSDP.clip_grad_norm_(
@@ -425,6 +533,19 @@ class BaseTrainer:
                     float(self.args.train.max_grad_norm),
                 )
                 self.optimizer.step()
+                if _profile:
+                    torch.cuda.synchronize(self.device)
+                    _t_opt1 = time.perf_counter()
+                    _prof["opt"] += _t_opt1 - _t_bwd1
+                    _prof["n"] += 1
+                    print_on_local_main(
+                        f"[profile] step={self.global_step} per-optstep: "
+                        f"data={_prof['data']:.1f}s fwd={_prof['fwd']:.1f}s "
+                        f"bwd={_prof['bwd']:.1f}s opt={_prof['opt']:.1f}s "
+                        f"(over {_prof['n']} optsteps, {self.gradient_accumulation_steps} micro each)",
+                        flush=True,
+                    )
+                    _prof = {"data": 0.0, "fwd": 0.0, "bwd": 0.0, "opt": 0.0, "n": 0}
                 training_logger.on_optimizer_step(
                     global_step=self.global_step,
                     next_micro_step=self.next_micro_step,

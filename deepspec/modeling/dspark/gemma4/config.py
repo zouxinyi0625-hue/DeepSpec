@@ -3,12 +3,20 @@ import copy
 from deepspec.modeling.dspark.common import validate_target_layer_ids
 
 
-TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
+# gemma4 draft uses SDPA (not flex_attention). The DSpark block mask is passed
+# as a dense [B,1,Q,KV] bool tensor. flex_attention can't be Triton-compiled on
+# A100 for gemma4 (global_head_dim=512 -> kernel shared-mem 200704 > 166912
+# limit), and uncompiled flex is 10-50x slower. SDPA's FlashAttention/mem-
+# efficient kernel handles head_dim=512 natively with no compile step.
+TRAIN_ATTN_IMPLEMENTATION = "sdpa"
 
 
 def get_gemma4_text_config(target_config):
+    if target_config.model_type in ("gemma4_text", "gemma4_unified_text"):
+        return copy.deepcopy(target_config)
     assert target_config.model_type in ("gemma4", "gemma4_unified"), (
-        "Gemma4 DSpark expects a Gemma4 or Gemma4 Unified top-level target config, "
+        "Gemma4 DSpark expects a Gemma4 or Gemma4 Unified top-level target config "
+        "(or a gemma4_text / gemma4_unified_text text config directly), "
         f"got model_type={target_config.model_type!r}."
     )
     text_config = target_config.text_config
@@ -52,6 +60,18 @@ def _validate_required_text_fields(text_config) -> None:
 def build_draft_config(target_config, model_args):
     draft_config = get_gemma4_text_config(target_config)
     _validate_required_text_fields(draft_config)
+    # The draft's MoE flag defaults to the target's, but can be explicitly
+    # overridden. Setting model.enable_moe_block=False builds a DENSE draft even
+    # when the target is MoE (e.g. Gemma4-26B-A4B) — this mirrors Google's own
+    # 26B MTP assistant, which is a dense Q-only draft over a MoE target.
+    if "enable_moe_block" in model_args:
+        draft_config.enable_moe_block = bool(model_args.enable_moe_block)
+    if bool(draft_config.enable_moe_block):
+        for field in ("num_experts", "moe_intermediate_size", "top_k_experts"):
+            assert hasattr(draft_config, field), (
+                f"target_config.text_config.{field} must be provided when "
+                "enable_moe_block is true."
+            )
 
     num_target_layers = int(draft_config.num_hidden_layers)
     num_draft_layers = int(model_args.num_draft_layers)
@@ -99,6 +119,8 @@ def build_draft_config(target_config, model_args):
     draft_config.markov_rank = markov_rank
     if markov_rank > 0:
         draft_config.markov_head_type = str(model_args.markov_head_type)
+    if bool(draft_config.enable_moe_block) and "top_k_experts" in model_args:
+        draft_config.top_k_experts = int(model_args.top_k_experts)
     return draft_config
 
 

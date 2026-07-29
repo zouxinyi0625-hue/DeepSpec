@@ -4,6 +4,7 @@ import json
 import mmap
 import os
 import queue
+import time
 import shutil
 import struct
 import threading
@@ -627,6 +628,7 @@ class CacheDataset(torch.utils.data.Dataset):
         self.max_open_shards = max_open_shards
         self.shard_handles = OrderedDict()
         self.shard_mmaps = OrderedDict()
+        self.shard_fds = OrderedDict()
         self.shard_paths = {
             int(shard["shard_id"]): build_target_cache_shard_path(
                 self.cache_dir,
@@ -643,10 +645,17 @@ class CacheDataset(torch.utils.data.Dataset):
             shard_mmap.close()
         for handle in getattr(self, "shard_handles", {}).values():
             handle.close()
+        for fd in getattr(self, "shard_fds", {}).values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         if hasattr(self, "shard_mmaps"):
             self.shard_mmaps.clear()
         if hasattr(self, "shard_handles"):
             self.shard_handles.clear()
+        if hasattr(self, "shard_fds"):
+            self.shard_fds.clear()
         if getattr(self, "index_mmap", None) is not None:
             self.index_mmap.close()
             self.index_mmap = None
@@ -663,6 +672,7 @@ class CacheDataset(torch.utils.data.Dataset):
         state["index_mmap"] = None
         state["shard_handles"] = OrderedDict()
         state["shard_mmaps"] = OrderedDict()
+        state["shard_fds"] = OrderedDict()
         return state
 
     def _ensure_index_mmap(self):
@@ -673,6 +683,23 @@ class CacheDataset(torch.utils.data.Dataset):
                 0,
                 access=mmap.ACCESS_READ,
             )
+
+    def _get_shard_fd(self, shard_id: int):
+        # Use raw file descriptors + os.pread instead of mmap. On network mounts
+        # (Azure blob) mmap random access page-faults one small page at a time,
+        # each a separate RPC (~9 MiB/s, 6.6s/sample). A single os.pread reads
+        # the whole contiguous tensor block in one syscall (~hundreds of MiB/s).
+        shard_id = int(shard_id)
+        if shard_id in self.shard_fds:
+            self.shard_fds.move_to_end(shard_id)
+            return self.shard_fds[shard_id]
+        shard_path = self.shard_paths[shard_id]
+        fd = os.open(shard_path, os.O_RDONLY)
+        self.shard_fds[shard_id] = fd
+        while len(self.shard_fds) > self.max_open_shards:
+            _evicted_id, evicted_fd = self.shard_fds.popitem(last=False)
+            os.close(evicted_fd)
+        return fd
 
     def _get_shard_mmap(self, shard_id: int):
         shard_id = int(shard_id)
@@ -707,23 +734,18 @@ class CacheDataset(torch.utils.data.Dataset):
     def _read_tensor_from_shard(
         self,
         *,
-        shard_mmap,
+        shard_fd,
         offset: int,
         shape,
         np_dtype,
         torch_dtype,
         nbytes: int,
     ):
-        assert int(offset) + int(nbytes) <= shard_mmap.size(), (
-            "Target cache tensor extends beyond shard size: "
-            f"offset={offset}, nbytes={nbytes}, shard_size={shard_mmap.size()}"
+        buf = os.pread(shard_fd, int(nbytes), int(offset))
+        assert len(buf) == int(nbytes), (
+            f"Short pread: got {len(buf)} of {nbytes} bytes at offset {offset}"
         )
-        array = np.frombuffer(
-            shard_mmap,
-            dtype=np_dtype,
-            count=int(np.prod(shape)),
-            offset=int(offset),
-        ).copy()
+        array = np.frombuffer(buf, dtype=np_dtype, count=int(np.prod(shape))).copy()
         tensor = torch.from_numpy(array).view(*shape)
         if tensor.dtype != torch_dtype:
             tensor = tensor.to(dtype=torch_dtype)
@@ -732,38 +754,35 @@ class CacheDataset(torch.utils.data.Dataset):
     def _read_bfloat16_tensor_from_shard(
         self,
         *,
-        shard_mmap,
+        shard_fd,
         offset: int,
         shape,
         nbytes: int,
     ):
-        assert int(offset) + int(nbytes) <= shard_mmap.size(), (
-            "Target cache tensor extends beyond shard size: "
-            f"offset={offset}, nbytes={nbytes}, shard_size={shard_mmap.size()}"
+        buf = os.pread(shard_fd, int(nbytes), int(offset))
+        assert len(buf) == int(nbytes), (
+            f"Short pread: got {len(buf)} of {nbytes} bytes at offset {offset}"
         )
-        array = np.frombuffer(
-            shard_mmap,
-            dtype=np.uint16,
-            count=int(np.prod(shape)),
-            offset=int(offset),
-        ).copy()
+        array = np.frombuffer(buf, dtype=np.uint16, count=int(np.prod(shape))).copy()
         tensor = torch.from_numpy(array).view(torch.bfloat16)
         return tensor.view(*shape)
 
     def __getitem__(self, index: int):
         if not (0 <= int(index) < self.num_samples):
             raise IndexError(index)
+        _dbg = os.environ.get("DSPARK_DEBUG_READ") == "1"
+        _t0 = time.perf_counter() if _dbg else 0.0
         record = self._read_record(int(index))
         seq_len = int(record["seq_len"])
         assert seq_len > 0, f"seq_len must be positive, got {seq_len}"
-        shard_mmap = self._get_shard_mmap(int(record["shard_id"]))
+        shard_fd = self._get_shard_fd(int(record["shard_id"]))
         nbytes = expected_target_cache_tensor_nbytes(
             seq_len=seq_len,
             hidden_size=self.hidden_size,
             num_target_layers=self.num_target_layers,
         )
         input_ids = self._read_tensor_from_shard(
-            shard_mmap=shard_mmap,
+            shard_fd=shard_fd,
             offset=record["input_ids_offset"],
             shape=(seq_len,),
             np_dtype=np.int32,
@@ -771,7 +790,7 @@ class CacheDataset(torch.utils.data.Dataset):
             nbytes=nbytes["input_ids"],
         )
         loss_mask = self._read_tensor_from_shard(
-            shard_mmap=shard_mmap,
+            shard_fd=shard_fd,
             offset=record["loss_mask_offset"],
             shape=(seq_len,),
             np_dtype=np.uint8,
@@ -779,23 +798,32 @@ class CacheDataset(torch.utils.data.Dataset):
             nbytes=nbytes["loss_mask"],
         )
         target_hidden_states = self._read_bfloat16_tensor_from_shard(
-            shard_mmap=shard_mmap,
+            shard_fd=shard_fd,
             offset=record["target_hidden_states_offset"],
             shape=(seq_len, self.num_target_layers * self.hidden_size),
             nbytes=nbytes["target_hidden_states"],
         )
         target_last_hidden_states = self._read_bfloat16_tensor_from_shard(
-            shard_mmap=shard_mmap,
+            shard_fd=shard_fd,
             offset=record["target_last_hidden_states_offset"],
             shape=(seq_len, self.hidden_size),
             nbytes=nbytes["target_last_hidden_states"],
         )
-        return {
+        result = {
             "input_ids": input_ids,
             "loss_mask": loss_mask,
             "target_hidden_states": target_hidden_states,
             "target_last_hidden_states": target_last_hidden_states,
         }
+        if _dbg:
+            dt = time.perf_counter() - _t0
+            if dt > 1.0:
+                print(
+                    f"[slow-read] idx={index} shard={int(record['shard_id'])} "
+                    f"seq_len={seq_len} took {dt:.1f}s",
+                    flush=True,
+                )
+        return result
 
 
 def _pad_1d_batch(features: List[Dict], key: str):

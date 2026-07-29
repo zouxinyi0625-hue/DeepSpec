@@ -4,6 +4,7 @@ import json
 import mmap
 import os
 import queue
+import time
 import shutil
 import struct
 import threading
@@ -769,6 +770,8 @@ class CacheDataset(torch.utils.data.Dataset):
     def __getitem__(self, index: int):
         if not (0 <= int(index) < self.num_samples):
             raise IndexError(index)
+        _dbg = os.environ.get("DSPARK_DEBUG_READ") == "1"
+        _t0 = time.perf_counter() if _dbg else 0.0
         record = self._read_record(int(index))
         seq_len = int(record["seq_len"])
         assert seq_len > 0, f"seq_len must be positive, got {seq_len}"
@@ -806,12 +809,21 @@ class CacheDataset(torch.utils.data.Dataset):
             shape=(seq_len, self.hidden_size),
             nbytes=nbytes["target_last_hidden_states"],
         )
-        return {
+        result = {
             "input_ids": input_ids,
             "loss_mask": loss_mask,
             "target_hidden_states": target_hidden_states,
             "target_last_hidden_states": target_last_hidden_states,
         }
+        if _dbg:
+            dt = time.perf_counter() - _t0
+            if dt > 1.0:
+                print(
+                    f"[slow-read] idx={index} shard={int(record['shard_id'])} "
+                    f"seq_len={seq_len} took {dt:.1f}s",
+                    flush=True,
+                )
+        return result
 
 
 def _pad_1d_batch(features: List[Dict], key: str):

@@ -258,11 +258,17 @@ class BaseTrainer:
         draft_model = draft_model.to(device=self.device, dtype=self.precision_dtype)
 
         # Training only uses the target checkpoint to initialize frozen draft
-        # embeddings and lm_head weights.
+        # embeddings and lm_head weights. Load it straight to CPU (device_map)
+        # so a large MoE target (e.g. 26B ~52GB) never transiently lands on the
+        # GPU: from_pretrained without device_map materializes weights on the
+        # current CUDA device first, then .to("cpu") copies them back — with 8
+        # ranks each briefly holding the full 26B this OOMs/deadlocks the GPUs.
         target_model = AutoModelForCausalLM.from_pretrained(
             model_args.target_model_name_or_path,
             dtype=self.precision_dtype,
-        ).to(device="cpu").eval()
+            device_map="cpu",
+            low_cpu_mem_usage=True,
+        ).eval()
         target_embed_tokens = target_model.get_input_embeddings()
         target_lm_head = target_model.get_output_embeddings()
         assert (target_lm_head is not None) and (target_embed_tokens is not None)

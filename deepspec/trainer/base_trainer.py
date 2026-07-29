@@ -487,6 +487,15 @@ class BaseTrainer:
 
         with self.suspend_controller.monitoring():
             for batch in prefetcher:
+                if self.next_micro_step < 3 or (
+                    self.next_micro_step % 16 == 0
+                    and self.global_step == 0
+                ):
+                    print_on_local_main(
+                        f"[startup] micro_step={self.next_micro_step} "
+                        f"got batch, running forward/backward ...",
+                        flush=True,
+                    )
                 should_sync = (
                     (self.next_micro_step + 1) % self.gradient_accumulation_steps == 0
                 )

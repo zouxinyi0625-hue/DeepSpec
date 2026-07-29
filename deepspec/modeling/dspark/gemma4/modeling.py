@@ -3,6 +3,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.attention.flex_attention import flex_attention
 
 from transformers.cache_utils import Cache
@@ -157,15 +158,25 @@ class Gemma4DSparkAttention(nn.Module):
         else:
             attn_is_causal = bool(kwargs.get("is_causal", False))
             self.is_causal = attn_is_causal
-            attn_output = F.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                attn_mask=attention_mask,
-                dropout_p=0.0 if not self.training else self.attention_dropout,
-                is_causal=attn_is_causal,
-                scale=self.scaling,
-            )
+            # Force the memory-efficient SDPA backend and forbid the MATH
+            # fallback. With head_dim=512 (26B target), PyTorch otherwise selects
+            # the MATH kernel, which materializes the full [heads, Q, KV] score
+            # matrix -> ~63GB/GPU and 40+s/step. The mem-efficient kernel tiles
+            # instead (supports arbitrary attn_mask and head_dim>128), cutting
+            # both memory and time. FLASH is also allowed but it rejects a dense
+            # bool mask, so it's a no-op here; EFFICIENT is the one that fires.
+            with sdpa_kernel(
+                [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION]
+            ):
+                attn_output = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=attention_mask,
+                    dropout_p=0.0 if not self.training else self.attention_dropout,
+                    is_causal=attn_is_causal,
+                    scale=self.scaling,
+                )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, -1)
         return self.o_proj(attn_output), None
